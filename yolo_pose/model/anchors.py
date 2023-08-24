@@ -35,6 +35,6 @@ def get_anchor(fpn_i: int, fpn_size: (int, int), config: Config):
     h = torch.cat(hs, dim=-1)
     w = torch.cat(ws, dim=-1)
 
-    anchor = torch.stack((y, x, h, w), dim=1)
+    anchor = torch.stack((y, x, h, w), dim=1).permute(0, 2, 1)
 
     return anchor

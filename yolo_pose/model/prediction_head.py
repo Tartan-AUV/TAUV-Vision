@@ -18,20 +18,23 @@ class PredictionHead(nn.Module):
         ])
 
         self._classification_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_classes, kernel_size=1, stride=1)
-        self._box_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * 4, kernel_size=1, stride=1)
-        self._mask_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_masks, kernel_size=1, stride=1)
-        self._point_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_points, kernel_size=1, stride=1)
+        self._box_encoding_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * 4, kernel_size=1, stride=1)
+        self._mask_coeff_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_masks, kernel_size=1, stride=1)
+        self._point_coeff_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_points, kernel_size=1, stride=1)
 
     def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, ...):
         x = self._initial_layers(fpn_output)
 
-        classification_output = self._classification_layer(x)
-        classification_output = classification_output.reshape(classification_output.size(0), -1, self._config.n_classes).permute(0, 2, 1)
-        box_output = self._box_layer(x)
-        box_output = box_output.reshape(box_output.size(0), -1, 4).permute(0, 2, 1)
-        mask_output = self._mask_layer(x)
-        mask_output = mask_output.reshape(mask_output.size(0), -1, self._config.n_prototype_masks).permute(0, 2, 1)
-        point_output = self._point_layer(x)
-        point_output = point_output.reshape(point_output.size(0), -1, self._config.n_prototype_points).permute(0, 2, 1)
+        classification = self._classification_layer(x)
+        classification = classification.reshape(classification.size(0), -1, self._config.n_classes)
+        box_encoding = self._box_encoding_layer(x)
+        box_encoding = box_encoding.reshape(box_encoding.size(0), -1, 4)
+        box_encoding[:, :, 2:4] = 2 * (F.sigmoid(box_encoding[:, :, 2:4]) - 0.5)
+        box_encoding[:, :, 0] /= x.size(2)
+        box_encoding[:, :, 1] /= x.size(3)
+        mask_coeff = self._mask_coeff_layer(x)
+        mask_coeff = mask_coeff.reshape(mask_coeff.size(0), -1, self._config.n_prototype_masks)
+        point_coeff = self._point_coeff_layer(x)
+        point_coeff = point_coeff.reshape(point_coeff.size(0), -1, self._config.n_prototype_points)
 
-        return (classification_output, box_output, mask_output, point_output)
+        return classification, box_encoding, mask_coeff, point_coeff

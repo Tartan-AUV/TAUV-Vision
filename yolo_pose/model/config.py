@@ -21,3 +21,8 @@ class Config:
 
     anchor_scales: (int, ...)
     anchor_aspect_ratios: (int, ...)
+
+    iou_pos_threshold: float
+    iou_neg_threshold: float
+
+    negative_example_ratio: int

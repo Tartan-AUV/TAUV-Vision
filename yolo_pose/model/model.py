@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+from PIL import Image
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 
 from yolo_pose.model.config import Config
 from yolo_pose.model.backbone import Resnet101Backbone
@@ -9,6 +11,8 @@ from yolo_pose.model.masknet import Masknet
 from yolo_pose.model.pointnet import Pointnet
 from yolo_pose.model.prediction_head import PredictionHead
 from yolo_pose.model.anchors import get_anchor
+from yolo_pose.model.loss import loss
+from torchviz import make_dot
 
 
 class YoloPose(nn.Module):
@@ -33,29 +37,30 @@ class YoloPose(nn.Module):
         point_prototype, direction_prototype = self._pointnet(fpn_outputs[0])
 
         classifications = []
-        boxes = []
-        masks = []
-        points = []
+        box_encodings = []
+        mask_coeffs = []
+        point_coeffs = []
         anchors = []
 
         for fpn_i, fpn_output in enumerate(fpn_outputs):
-            classification, box, mask, point = self._prediction_head(fpn_output)
+            classification, box_encoding, mask_coeff, point_coeff = self._prediction_head(fpn_output)
 
-            anchor = get_anchor(fpn_i, tuple(fpn_output.size()[2:4]), self._config)
+            anchor = get_anchor(fpn_i, tuple(fpn_output.size()[2:4]), self._config).detach()
+            anchor = anchor.to(box_encoding.device)
 
             classifications.append(classification)
-            boxes.append(box)
-            masks.append(mask)
-            points.append(point)
+            box_encodings.append(box_encoding)
+            mask_coeffs.append(mask_coeff)
+            point_coeffs.append(point_coeff)
             anchors.append(anchor)
 
-        classification = torch.cat(classifications, dim=-1)
-        box = torch.cat(boxes, dim=-1)
-        mask = torch.cat(masks, dim=-1)
-        point = torch.cat(points, dim=-1)
-        anchor = torch.cat(anchors, dim=-1)
+        classification = torch.cat(classifications, dim=1)
+        box_encoding = torch.cat(box_encodings, dim=1)
+        mask_coeff = torch.cat(mask_coeffs, dim=1)
+        point_coeff = torch.cat(point_coeffs, dim=1)
+        anchor = torch.cat(anchors, dim=1)
 
-        return classification, box, mask, point, anchor, mask_prototype, point_prototype, direction_prototype
+        return classification, box_encoding, mask_coeff, point_coeff, anchor, mask_prototype, point_prototype, direction_prototype
 
 
 def main():
@@ -75,11 +80,93 @@ def main():
         n_fpn_downsample_layers=2,
         anchor_scales=(24, 48, 96, 192, 384),
         anchor_aspect_ratios=(1/2, 1, 2),
+        iou_pos_threshold=0.5,
+        iou_neg_threshold=0.4,
+        negative_example_ratio=3,
     )
-    model = YoloPose(config)
 
-    img = torch.rand(1, 3, config.in_h, config.in_w)
-    out = model(img)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = YoloPose(config).to(device)
+
+    cmu_img = Image.open("../../img/cmu.png").convert("RGB")
+    img = transforms.ToTensor()(cmu_img).to(device)
+    img = img.unsqueeze(0).tile((6, 1, 1, 1))
+
+    # img = torch.rand(3, 3, config.in_h, config.in_w).to(device)
+
+    truth_valid = torch.tensor([
+        [True, True],
+        [True, True],
+        [True, True],
+        [True, True],
+        [True, True],
+        [True, True],
+    ]).to(device)
+    truth_classification = torch.tensor([
+        [1, 2],
+        [1, 2],
+        [1, 2],
+        [1, 2],
+        [1, 2],
+        [1, 2],
+    ]).to(device)
+    truth_box = torch.tensor([
+        [
+            [0.5, 0.5, 0.5, 0.5],
+            [0.7, 0.7, 0.3, 0.3],
+        ],
+        [
+            [0.5, 0.5, 0.5, 0.5],
+            [0.7, 0.7, 0.3, 0.3],
+        ],
+        [
+            [0.5, 0.5, 0.5, 0.5],
+            [0.7, 0.7, 0.3, 0.3],
+        ],
+        [
+            [0.5, 0.5, 0.5, 0.5],
+            [0.7, 0.7, 0.3, 0.3],
+        ],
+        [
+            [0.5, 0.5, 0.5, 0.5],
+            [0.7, 0.7, 0.3, 0.3],
+        ],
+        [
+            [0.5, 0.5, 0.5, 0.5],
+            [0.7, 0.7, 0.3, 0.3],
+        ],
+    ]).to(device)
+    truth_mask = torch.rand(6, 2, config.in_h, config.in_w).to(device)
+    truth_point = torch.rand(6, 2, 9, config.in_h, config.in_w).to(device)
+    truth_direction = torch.rand(6, 2, 8, config.in_h, config.in_w).to(device)
+
+    truth = (truth_valid, truth_classification, truth_box, truth_mask, truth_point, truth_direction)
+
+    model.train()
+
+    prediction = model.forward(img)
+
+    l = loss(prediction, truth, config)
+    total_loss, _ = l
+
+    make_dot(total_loss, params=dict(model.named_parameters()), show_attrs=True, show_saved=True).render("dag", format="svg")
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9)
+
+    for iteration_i in range(1000):
+        optimizer.zero_grad()
+
+        prediction = model.forward(img)
+
+        l = loss(prediction, truth, config)
+        total_loss, _ = l
+        print(l)
+
+        total_loss.backward()
+
+        optimizer.step()
+
 
 if __name__ == "__main__":
     main()
