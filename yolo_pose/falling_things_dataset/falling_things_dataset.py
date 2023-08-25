@@ -8,6 +8,8 @@ from enum import Enum
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
+from yolo_pose.model.boxes import corners_to_box, box_to_corners
+
 
 class FallingThingsVariant(Enum):
     SINGLE = "single"
@@ -62,6 +64,7 @@ falling_things_object_ids = {member.value: index for index, member in enumerate(
 @dataclass
 class FallingThingsSample:
     intrinsics: torch.Tensor
+    valid: torch.Tensor
     classifications: torch.Tensor
     bounding_boxes: torch.Tensor
     poses: torch.Tensor
@@ -114,7 +117,7 @@ class FallingThingsDataset(Dataset):
                  root: str,
                  variant: FallingThingsVariant,
                  environments: List[FallingThingsEnvironment],
-                 objects: Optional[List[FallingThingsObject]]
+                 objects: Optional[List[FallingThingsObject]] = None
                  ):
         super().__init__()
 
@@ -179,10 +182,13 @@ class FallingThingsDataset(Dataset):
         ]
         classifications = torch.Tensor(classifications)
 
-        bounding_boxes = [
+        valid = torch.full(classifications.size(), True)
+
+        corners = [
             object["bounding_box"]["top_left"] + object["bounding_box"]["bottom_right"] for object in left_data["objects"]
         ]
-        bounding_boxes = torch.Tensor(bounding_boxes)
+        corners = torch.Tensor(corners)
+        bounding_boxes = corners_to_box(corners.unsqueeze(0)).squeeze(0)
 
         cuboids = [
             object["cuboid"] for object in left_data["objects"]
@@ -212,6 +218,7 @@ class FallingThingsDataset(Dataset):
 
         sample = FallingThingsSample(
             intrinsics=intrinsics,
+            valid=valid,
             classifications=classifications,
             bounding_boxes=bounding_boxes,
             poses=poses,
@@ -246,6 +253,7 @@ class FallingThingsDataset(Dataset):
 
 def main():
     import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
 
 
     single_dataset = FallingThingsDataset(
@@ -277,8 +285,21 @@ def main():
     )
 
     mixed_sample = mixed_dataset[0]
-    plt.figure()
-    plt.imshow(mixed_sample.img.permute(1, 2, 0))
+    fig, axs = plt.subplots()
+    axs.imshow(mixed_sample.img.permute(1, 2, 0))
+    axs.scatter(mixed_sample.projected_cuboids[:, :, 0], mixed_sample.projected_cuboids[:, :, 1])
+
+    bbox = box_to_corners(mixed_sample.bounding_boxes.unsqueeze(0)).squeeze(0)
+    for i in range(bbox.size(0)):
+        rectangle = patches.Rectangle(
+            (bbox[i, 1], bbox[i, 0]),
+            bbox[i, 3] - bbox[i, 1],
+            bbox[i, 2] - bbox[i, 0],
+            linewidth=2,
+            edgecolor="b",
+            facecolor="none",
+        )
+        axs.add_patch(rectangle)
     plt.figure()
     plt.imshow(mixed_sample.seg)
     plt.figure()
