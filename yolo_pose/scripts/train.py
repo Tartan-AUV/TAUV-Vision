@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 from typing import List
 
 from yolo_pose.model.config import Config
@@ -13,7 +14,7 @@ config = Config(
     in_w=512,
     in_h=512,
     feature_depth=256,
-    n_classes=3,
+    n_classes=21,
     n_prototype_masks=32,
     n_prototype_points=64,
     n_points=8,
@@ -30,12 +31,19 @@ config = Config(
     negative_example_ratio=3,
 )
 
-lr = 1e-3
+lr = 1e-2
 momentum = 0.9
 weight_decay = 0.9
 n_epochs = 1000
 train_split = 0.9
-batch_size = 32
+batch_size = 4
+
+hue_jitter = 0.5
+saturation_jitter = 0.5
+brightness_jitter = 0.5
+
+img_mean = (0.485, 0.456, 0.406)
+img_stddev = (0.229, 0.224, 0.225)
 
 trainval_environments = [
     FallingThingsEnvironment.Kitchen0,
@@ -96,11 +104,79 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
     return sample
 
 
-def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimizer):
-    pass
+def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
+    # TODO Crop all of these, and apply basic color transformations to img
 
-def run_validation_epoch(epoch_i: int, model: YoloPose):
-    pass
+    # crop_transforms = transforms.Compose([
+    #     transforms.Resize(min(config.in_h, config.in_w), interpolation=transforms.InterpolationMode.BILINEAR),
+    #     transforms.CenterCrop((config.in_h, config.in_w)),
+    # ])
+    #
+    # seg_crop_transforms = transforms.Compose([
+    #     transforms.Resize(min(config.in_h, config.in_w), interpolation=transforms.InterpolationMode.NEAREST),
+    #     transforms.CenterCrop((config.in_h, config.in_w)),
+    # ])
+
+    color_transforms = transforms.Compose([
+        transforms.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter),
+        transforms.Normalize(mean=img_mean, std=img_stddev),
+    ])
+
+    img = color_transforms(sample.img)
+    seg = sample.seg
+    depth = sample.depth
+
+    transformed_sample = FallingThingsSample(
+        intrinsics=sample.intrinsics,
+        valid=sample.valid,
+        classifications=sample.classifications,
+        bounding_boxes=sample.bounding_boxes,
+        poses=sample.poses,
+        cuboids=sample.cuboids,
+        projected_cuboids=sample.projected_cuboids,
+        img=img,
+        seg=seg,
+        depth=depth,
+    )
+
+    return transformed_sample
+
+
+def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimizer, data_loader: DataLoader, device: torch.device):
+    model.train()
+
+    for batch_i, batch in enumerate(data_loader):
+        print(f"train epoch {epoch_i}, batch {batch_i}")
+
+        optimizer.zero_grad()
+
+        img = batch.img.to(device)
+        truth = (
+            batch.valid.to(device),
+            batch.classifications.to(device),
+            batch.bounding_boxes.to(device),
+            batch.seg.to(device),
+            None,
+            None,
+        )
+
+        prediction = model.forward(img)
+
+        total_loss, (classification_loss, box_loss) = loss(prediction, truth, config)
+
+        print(f"total loss: {float(total_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}")
+
+        total_loss.backward()
+
+        optimizer.step()
+
+def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
+    model.eval()
+
+    for batch_i, batch in enumerate(data_loader):
+        print(f"val epoch {epoch_i}, batch {batch_i}")
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -109,7 +185,13 @@ def main():
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
 
-    trainval_dataset = FallingThingsDataset(falling_things_root, FallingThingsVariant.MIXED, trainval_environments)
+    trainval_dataset = FallingThingsDataset(
+        falling_things_root,
+        FallingThingsVariant.MIXED,
+        trainval_environments,
+        None,
+        transform_sample
+    )
 
     train_size = int(train_split * len(trainval_dataset))
     val_size = len(trainval_dataset) - train_size
@@ -128,12 +210,14 @@ def main():
     )
 
     for epoch_i in range(n_epochs):
-        for batch in train_dataloader:
-            pass
-        # Run training
+        run_train_epoch(epoch_i, model, optimizer, train_dataloader, device)
 
-        # Run validation
-        pass
+        run_validation_epoch(epoch_i, model, val_dataloader, device)
+
+        if epoch_i % 10 == 0:
+            # Save shit
+            pass
+
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import torch
 import json
 from PIL import Image
 from dataclasses import dataclass
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Callable
 from pathlib import Path
 from enum import Enum
 from torch.utils.data import Dataset
@@ -117,7 +117,8 @@ class FallingThingsDataset(Dataset):
                  root: str,
                  variant: FallingThingsVariant,
                  environments: List[FallingThingsEnvironment],
-                 objects: Optional[List[FallingThingsObject]] = None
+                 objects: Optional[List[FallingThingsObject]],
+                 transforms: Callable[[FallingThingsSample], FallingThingsSample],
                  ):
         super().__init__()
 
@@ -180,7 +181,7 @@ class FallingThingsDataset(Dataset):
         classifications = [
             falling_things_object_ids[object["class"].lower()] for object in left_data["objects"]
         ]
-        classifications = torch.Tensor(classifications)
+        classifications = torch.Tensor(classifications).to(torch.long)
 
         valid = torch.full(classifications.size(), True)
 
@@ -188,7 +189,6 @@ class FallingThingsDataset(Dataset):
             object["bounding_box"]["top_left"] + object["bounding_box"]["bottom_right"] for object in left_data["objects"]
         ]
         corners = torch.Tensor(corners)
-        bounding_boxes = corners_to_box(corners.unsqueeze(0)).squeeze(0)
 
         cuboids = [
             object["cuboid"] for object in left_data["objects"]
@@ -215,6 +215,12 @@ class FallingThingsDataset(Dataset):
         depth = depth.float()
         depth[depth == 65535] = torch.nan
         depth = depth / 1e4
+
+        corners[:, 0] = corners[:, 0] / img.size(1)
+        corners[:, 1] = corners[:, 1] / img.size(2)
+        corners[:, 2] = corners[:, 2] / img.size(1)
+        corners[:, 3] = corners[:, 3] / img.size(2)
+        bounding_boxes = corners_to_box(corners.unsqueeze(0)).squeeze(0)
 
         sample = FallingThingsSample(
             intrinsics=intrinsics,

@@ -26,15 +26,19 @@ class PredictionHead(nn.Module):
         x = self._initial_layers(fpn_output)
 
         classification = self._classification_layer(x)
+        classification = classification.permute(0, 2, 3, 1)
         classification = classification.reshape(classification.size(0), -1, self._config.n_classes)
         box_encoding = self._box_encoding_layer(x)
+        box_encoding = box_encoding.permute(0, 2, 3, 1)
         box_encoding = box_encoding.reshape(box_encoding.size(0), -1, 4)
         box_encoding[:, :, 2:4] = 2 * (F.sigmoid(box_encoding[:, :, 2:4]) - 0.5)
         box_encoding[:, :, 0] /= x.size(2)
         box_encoding[:, :, 1] /= x.size(3)
         mask_coeff = self._mask_coeff_layer(x)
+        mask_coeff = mask_coeff.permute(0, 2, 3, 1)
         mask_coeff = mask_coeff.reshape(mask_coeff.size(0), -1, self._config.n_prototype_masks)
         point_coeff = self._point_coeff_layer(x)
+        point_coeff = point_coeff.permute(0, 2, 3, 1)
         point_coeff = point_coeff.reshape(point_coeff.size(0), -1, self._config.n_prototype_points)
 
         return classification, box_encoding, mask_coeff, point_coeff

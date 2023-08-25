@@ -22,6 +22,7 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
 
     match_iou, match_index = torch.max(iou * truth_valid.unsqueeze(1).float(), dim=2)
 
+    # TODO: Handle case where there are no positive matches
     positive_match = match_iou >= config.iou_pos_threshold
     negative_match = match_iou <= config.iou_neg_threshold
     neutral_match = ~(positive_match | negative_match)
@@ -49,9 +50,6 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
         selected_match = torch.clone(positive_match[batch_i])
         selected_match[selected_negative_match_index] = True
         selected_match = selected_match.detach()
-
-        print("positive", classification_cross_entropy[positive_match[batch_i]])
-        print("selected_negative", classification_cross_entropy[selected_negative_match_index])
 
         classification_loss = (selected_match.float() * classification_cross_entropy).sum()
 
