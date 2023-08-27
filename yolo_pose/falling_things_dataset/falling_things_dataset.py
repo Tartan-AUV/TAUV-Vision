@@ -71,12 +71,12 @@ class FallingThingsSample:
     cuboids: torch.Tensor
     projected_cuboids: torch.Tensor
     img: torch.Tensor
-    seg: torch.Tensor
-    depth: torch.Tensor
+    seg_map: torch.Tensor
+    depth_map: torch.Tensor
+    position_map: torch.Tensor
 
 
 class FallingThingsDataset(Dataset):
-
     """
     Directory structure, from https://pytorch.org/vision/0.15/_modules/torchvision/datasets/_stereo_matching.html#FallingThingsStereo
 
@@ -186,7 +186,8 @@ class FallingThingsDataset(Dataset):
         valid = torch.full(classifications.size(), True)
 
         corners = [
-            object["bounding_box"]["top_left"] + object["bounding_box"]["bottom_right"] for object in left_data["objects"]
+            object["bounding_box"]["top_left"] + object["bounding_box"]["bottom_right"] for object in
+            left_data["objects"]
         ]
         corners = torch.Tensor(corners)
 
@@ -207,10 +208,12 @@ class FallingThingsDataset(Dataset):
 
         img = to_tensor(Image.open(left_img_path))
         seg = to_tensor(Image.open(left_seg_path))[0]
+        seg = (255 * seg).to(torch.uint8)
         depth = to_tensor(Image.open(left_depth_path))[0]
 
         for object in object_data["exported_objects"]:
-            seg = torch.where(seg == object["segmentation_class_id"], falling_things_object_ids[object["class"].lower()], seg)
+            seg = torch.where(seg == object["segmentation_class_id"],
+                              falling_things_object_ids[object["class"].lower()], seg)
 
         depth = depth.float()
         depth[depth == 65535] = torch.nan
@@ -222,6 +225,9 @@ class FallingThingsDataset(Dataset):
         corners[:, 3] = corners[:, 3] / img.size(2)
         bounding_boxes = corners_to_box(corners.unsqueeze(0)).squeeze(0)
 
+        # TODO: Do the funky math here
+        position_map = get_position_map(poses, depth, intrinsics)
+
         sample = FallingThingsSample(
             intrinsics=intrinsics,
             valid=valid,
@@ -231,12 +237,12 @@ class FallingThingsDataset(Dataset):
             cuboids=cuboids,
             projected_cuboids=projected_cuboids,
             img=img,
-            seg=seg,
-            depth=depth,
+            seg_map=seg,
+            depth_map=depth,
+            position_map=position_map,
         )
 
         return sample
-
 
     def _get_id_paths(self, dirs: List[Path]) -> Dict[Path, List[int]]:
         id_paths = {}
@@ -257,10 +263,10 @@ class FallingThingsDataset(Dataset):
         with open(path, "r") as file:
             return json.load(file)
 
+
 def main():
     import matplotlib.pyplot as plt
     import matplotlib.patches as patches
-
 
     single_dataset = FallingThingsDataset(
         "~/Documents/falling_things/fat",
@@ -274,7 +280,8 @@ def main():
         ],
         [
             FallingThingsObject.CrackerBox,
-        ]
+        ],
+        transforms=lambda x: x,
     )
 
     mixed_dataset = FallingThingsDataset(
@@ -287,7 +294,8 @@ def main():
             FallingThingsEnvironment.Kitchen3,
             FallingThingsEnvironment.Kitchen4,
         ],
-        None
+        None,
+        transforms=lambda x: x,
     )
 
     mixed_sample = mixed_dataset[0]
@@ -307,14 +315,72 @@ def main():
         )
         axs.add_patch(rectangle)
     plt.figure()
-    plt.imshow(mixed_sample.seg)
+    plt.imshow(mixed_sample.seg_map)
     plt.figure()
-    plt.imshow(mixed_sample.depth)
+    plt.imshow(mixed_sample.depth_map)
 
-    # TODO: Draw cuboids and shit, make sure everything checks out
+    n_detections = mixed_sample.poses.size()[0]
+
+    for detection_i in range(n_detections):
+        x, y, z = mixed_sample.position_map[detection_i]
+
+        mask = mixed_sample.seg_map == mixed_sample.classifications[detection_i]
+
+        plt.figure()
+        plt.imshow(torch.where(mask, x, torch.nan))
+        plt.figure()
+        plt.imshow(torch.where(mask, y, torch.nan))
+        plt.figure()
+        plt.imshow(torch.where(mask, z, torch.nan))
 
     plt.show()
 
 
+def get_position_map(poses: torch.Tensor,
+                     depth_map: torch.Tensor,
+                     intrinsics: torch.Tensor,
+                     ) -> torch.Tensor:
+    # Shape n_detections x 3 x h x w
+    n_detections = poses.size()[0]
+    h, w = depth_map.size()
+
+    position_map = torch.zeros((n_detections, 3, h, w), dtype=torch.float, device=poses.device)
+
+    for detection_i in range(n_detections):
+        pose = poses[detection_i]
+
+        cam_z = depth_map.reshape(-1)
+        cam_pixel_x = torch.arange(0, w).repeat(h)
+        cam_pixel_y = torch.arange(0, h).repeat_interleave(w)
+        f_x, f_y, c_x, c_y = intrinsics
+        cam_x = (cam_z / f_x) * (cam_pixel_x - c_x)
+        cam_y = (cam_z / f_y) * (cam_pixel_y - c_y)
+
+        cam_pos = torch.stack((cam_x, cam_y, cam_z), dim=0)
+
+        cam_t_obj_trans = pose[0:3]
+        cam_t_obj_quat_xyzw = pose[3:7]
+        obj_t_cam_quat_xyzw = cam_t_obj_quat_xyzw * torch.tensor([1, 1, 1, -1])
+        obj_t_cam_rotm = quat_xyzw_to_rotm(obj_t_cam_quat_xyzw)
+
+        obj_pos = torch.matmul(obj_t_cam_rotm, cam_pos) - cam_t_obj_trans.unsqueeze(1)
+
+        obj_pos = obj_pos.reshape(3, h, w)
+
+        position_map[detection_i] = obj_pos
+
+    return position_map
+
+def quat_xyzw_to_rotm(quat_xyzw: torch.Tensor) -> torch.Tensor:
+    q_x, q_y, q_z, q_w = quat_xyzw
+    rotm = torch.tensor([
+        [1 - 2 * q_y ** 2 - 2 * q_z ** 2, 2 * q_x * q_y - 2 * q_z * q_w, 2 * q_x * q_z + 2 * q_y * q_w],
+        [2 * q_x * q_y + 2 * q_z * q_w, 1 - 2 * q_x ** 2 - 2 * q_z ** 2, 2 * q_y * q_z - 2 * q_x * q_w],
+        [2 * q_x * q_z - 2 * q_y * q_w, 2 * q_y * q_z + 2 * q_x * q_w, 1 - 2 * q_x ** 2 - 2 * q_y ** 2]
+    ])
+    return rotm
+
+
 if __name__ == "__main__":
     main()
+
