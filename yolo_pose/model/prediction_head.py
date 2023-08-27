@@ -20,7 +20,7 @@ class PredictionHead(nn.Module):
         self._classification_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_classes, kernel_size=1, stride=1)
         self._box_encoding_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * 4, kernel_size=1, stride=1)
         self._mask_coeff_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_masks, kernel_size=1, stride=1)
-        self._point_coeff_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_points, kernel_size=1, stride=1)
+        self._point_coeff_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_points * (config.n_points + 1), kernel_size=1, stride=1)
 
     def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, ...):
         x = self._initial_layers(fpn_output)
@@ -37,8 +37,9 @@ class PredictionHead(nn.Module):
         mask_coeff = self._mask_coeff_layer(x)
         mask_coeff = mask_coeff.permute(0, 2, 3, 1)
         mask_coeff = mask_coeff.reshape(mask_coeff.size(0), -1, self._config.n_prototype_masks)
+        mask_coeff = F.tanh(mask_coeff)
         point_coeff = self._point_coeff_layer(x)
         point_coeff = point_coeff.permute(0, 2, 3, 1)
-        point_coeff = point_coeff.reshape(point_coeff.size(0), -1, self._config.n_prototype_points)
+        point_coeff = point_coeff.reshape(point_coeff.size(0), -1, self._config.n_points + 1, self._config.n_prototype_points)
 
         return classification, box_encoding, mask_coeff, point_coeff

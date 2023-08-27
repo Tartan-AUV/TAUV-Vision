@@ -12,6 +12,7 @@ from yolo_pose.model.pointnet import Pointnet
 from yolo_pose.model.prediction_head import PredictionHead
 from yolo_pose.model.anchors import get_anchor
 from yolo_pose.model.loss import loss
+from yolo_pose.model.boxes import box_to_mask
 from torchviz import make_dot
 
 
@@ -137,9 +138,12 @@ def main():
             [0.7, 0.7, 0.3, 0.3],
         ],
     ]).to(device)
-    truth_mask = torch.rand(6, 2, config.in_h, config.in_w).to(device)
-    truth_point = torch.rand(6, 2, 9, config.in_h, config.in_w).to(device)
-    truth_direction = torch.rand(6, 2, 8, config.in_h, config.in_w).to(device)
+    truth_mask = torch.zeros(6, 2, config.in_h, config.in_w).to(device)
+    for batch_i in range(truth_mask.size(0)):
+        for detection_i in range(truth_mask.size(1)):
+            truth_mask[batch_i, detection_i] = box_to_mask(truth_box[batch_i, detection_i], (config.in_h, config.in_w))
+    truth_point = torch.zeros(6, 2, 9, config.in_h, config.in_w).to(device)
+    truth_direction = torch.full((6, 2, 8, config.in_h, config.in_w), 1, dtype=torch.float).to(device)
 
     truth = (truth_valid, truth_classification, truth_box, truth_mask, truth_point, truth_direction)
 

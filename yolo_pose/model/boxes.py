@@ -71,6 +71,24 @@ def iou_matrix(box_a: torch.Tensor, box_b: torch.Tensor) -> torch.Tensor:
     return iou
 
 
+def box_to_mask(box, img_size):
+    y_grid = torch.arange(0, img_size[0], dtype=torch.float, device=box.device)
+    x_grid = torch.arange(0, img_size[1], dtype=torch.float, device=box.device)
+    x_coords, y_coords = torch.meshgrid(x_grid, y_grid)
+
+    box = box * torch.tensor([img_size[0], img_size[1], img_size[0], img_size[1]], device=box.device)
+
+    left = box[1] - box[3] / 2
+    right = box[1] + box[3] / 2
+    top = box[0] - box[2] / 2
+    bottom = box[0] + box[2] / 2
+
+    mask = (x_coords >= left) & (x_coords <= right) & (y_coords >= top) & (y_coords <= bottom)
+    mask = mask.float()
+
+    return mask
+
+
 def main():
     box = torch.rand((1, 1, 4))
     anchor = torch.rand((1, 1, 4))

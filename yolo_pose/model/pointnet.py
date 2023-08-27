@@ -32,7 +32,7 @@ class Pointnet(nn.Module):
         x = self._post_upsample_layers(x)
 
         point_output = self._point_output_layer(x)
-        point_output = F.relu(point_output)
+        point_output = F.sigmoid(point_output)
         direction_output = self._direction_output_layer(x)
         direction_output = torch.clamp(direction_output, -pi, pi)
 
