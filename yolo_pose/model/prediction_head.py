@@ -17,10 +17,20 @@ class PredictionHead(nn.Module):
             for _ in range(self._config.n_prediction_head_layers)
         ])
 
-        self._classification_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_classes, kernel_size=1, stride=1)
-        self._box_encoding_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * 4, kernel_size=1, stride=1)
-        self._mask_coeff_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_masks, kernel_size=1, stride=1)
-        self._point_coeff_layer = nn.Conv2d(config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_points * (config.n_points + 1), kernel_size=1, stride=1)
+        self._classification_layer = nn.Conv2d(
+            config.feature_depth, len(config.anchor_aspect_ratios) * config.n_classes, kernel_size=1, stride=1,
+        )
+        self._box_encoding_layer = nn.Conv2d(
+            config.feature_depth, len(config.anchor_aspect_ratios) * 4, kernel_size=1, stride=1,
+        )
+        self._mask_coeff_layer = nn.Conv2d(
+            config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_masks, kernel_size=1, stride=1,
+        )
+        self._position_map_coeff_layer = nn.Conv2d(
+            config.feature_depth,
+            len(config.anchor_aspect_ratios) * config.n_prototype_position_maps,
+            kernel_size=1, stride=1,
+        )
 
     def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, ...):
         x = self._initial_layers(fpn_output)
@@ -28,18 +38,23 @@ class PredictionHead(nn.Module):
         classification = self._classification_layer(x)
         classification = classification.permute(0, 2, 3, 1)
         classification = classification.reshape(classification.size(0), -1, self._config.n_classes)
+
         box_encoding = self._box_encoding_layer(x)
         box_encoding = box_encoding.permute(0, 2, 3, 1)
         box_encoding = box_encoding.reshape(box_encoding.size(0), -1, 4)
         box_encoding[:, :, 2:4] = 2 * (F.sigmoid(box_encoding[:, :, 2:4]) - 0.5)
         box_encoding[:, :, 0] /= x.size(2)
         box_encoding[:, :, 1] /= x.size(3)
+
         mask_coeff = self._mask_coeff_layer(x)
         mask_coeff = mask_coeff.permute(0, 2, 3, 1)
         mask_coeff = mask_coeff.reshape(mask_coeff.size(0), -1, self._config.n_prototype_masks)
         mask_coeff = F.tanh(mask_coeff)
-        point_coeff = self._point_coeff_layer(x)
-        point_coeff = point_coeff.permute(0, 2, 3, 1)
-        point_coeff = point_coeff.reshape(point_coeff.size(0), -1, self._config.n_points + 1, self._config.n_prototype_points)
 
-        return classification, box_encoding, mask_coeff, point_coeff
+        position_map_coeff = self._position_map_coeff_layer(x)
+        position_map_coeff = position_map_coeff.permute(0, 2, 3, 1)
+        position_map_coeff = position_map_coeff.reshape(
+            position_map_coeff.size(0), -1, self._config.n_prototype_position_maps
+        )
+
+        return classification, box_encoding, mask_coeff, position_map_coeff

@@ -7,6 +7,7 @@ from pathlib import Path
 from enum import Enum
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
+# from spatialmath import SE3, Quaternion, UnitQuaternion, SO3
 
 from yolo_pose.model.boxes import corners_to_box, box_to_corners
 
@@ -67,6 +68,7 @@ class FallingThingsSample:
     valid: torch.Tensor
     classifications: torch.Tensor
     bounding_boxes: torch.Tensor
+    camera_pose: torch.Tensor
     poses: torch.Tensor
     cuboids: torch.Tensor
     projected_cuboids: torch.Tensor
@@ -183,7 +185,7 @@ class FallingThingsDataset(Dataset):
         ]
         classifications = torch.Tensor(classifications).to(torch.long)
 
-        valid = torch.full(classifications.size(), True)
+        valid = classifications > 0
 
         corners = [
             object["bounding_box"]["top_left"] + object["bounding_box"]["bottom_right"] for object in
@@ -201,10 +203,17 @@ class FallingThingsDataset(Dataset):
         ]
         projected_cuboids = torch.Tensor(projected_cuboids)
 
+        camera_pose = left_data["camera_data"]["location_worldframe"] + left_data["camera_data"]["quaternion_xyzw_worldframe"]
+        camera_pose = torch.Tensor(camera_pose)
+        camera_pose[0:3] /= 100
+
         poses = [
             object["location"] + object["quaternion_xyzw"] for object in left_data["objects"]
         ]
         poses = torch.Tensor(poses)
+        poses[:, 0:3] /= 100
+
+        # Apply inverse of camera_pose to poses
 
         img = to_tensor(Image.open(left_img_path))
         seg = to_tensor(Image.open(left_seg_path))[0]
@@ -216,7 +225,6 @@ class FallingThingsDataset(Dataset):
                               falling_things_object_ids[object["class"].lower()], seg)
 
         depth = depth.float()
-        depth[depth == 65535] = torch.nan
         depth = depth / 1e4
 
         corners[:, 0] = corners[:, 0] / img.size(1)
@@ -226,13 +234,14 @@ class FallingThingsDataset(Dataset):
         bounding_boxes = corners_to_box(corners.unsqueeze(0)).squeeze(0)
 
         # TODO: Do the funky math here
-        position_map = get_position_map(poses, depth, intrinsics)
+        position_map = get_position_map(camera_pose, poses, classifications, seg, depth, intrinsics)
 
         sample = FallingThingsSample(
             intrinsics=intrinsics,
             valid=valid,
             classifications=classifications,
             bounding_boxes=bounding_boxes,
+            camera_pose=camera_pose,
             poses=poses,
             cuboids=cuboids,
             projected_cuboids=projected_cuboids,
@@ -319,24 +328,22 @@ def main():
     plt.figure()
     plt.imshow(mixed_sample.depth_map)
 
-    n_detections = mixed_sample.poses.size()[0]
+    x, y, z = mixed_sample.position_map
 
-    for detection_i in range(n_detections):
-        x, y, z = mixed_sample.position_map[detection_i]
-
-        mask = mixed_sample.seg_map == mixed_sample.classifications[detection_i]
-
-        plt.figure()
-        plt.imshow(torch.where(mask, x, torch.nan))
-        plt.figure()
-        plt.imshow(torch.where(mask, y, torch.nan))
-        plt.figure()
-        plt.imshow(torch.where(mask, z, torch.nan))
+    plt.figure()
+    plt.imshow(x)
+    plt.figure()
+    plt.imshow(y)
+    plt.figure()
+    plt.imshow(z)
 
     plt.show()
 
 
-def get_position_map(poses: torch.Tensor,
+def get_position_map(camera_pose: torch.Tensor,
+                     poses: torch.Tensor,
+                     classifications: torch.Tensor,
+                     seg_map: torch.Tensor,
                      depth_map: torch.Tensor,
                      intrinsics: torch.Tensor,
                      ) -> torch.Tensor:
@@ -344,10 +351,12 @@ def get_position_map(poses: torch.Tensor,
     n_detections = poses.size()[0]
     h, w = depth_map.size()
 
-    position_map = torch.zeros((n_detections, 3, h, w), dtype=torch.float, device=poses.device)
+    position_map = torch.zeros((3, h, w), dtype=torch.float, device=poses.device)
 
     for detection_i in range(n_detections):
         pose = poses[detection_i]
+
+        # SE3().plot()
 
         cam_z = depth_map.reshape(-1)
         cam_pixel_x = torch.arange(0, w).repeat(h)
@@ -358,16 +367,37 @@ def get_position_map(poses: torch.Tensor,
 
         cam_pos = torch.stack((cam_x, cam_y, cam_z), dim=0)
 
-        cam_t_obj_trans = pose[0:3]
-        cam_t_obj_quat_xyzw = pose[3:7]
-        obj_t_cam_quat_xyzw = cam_t_obj_quat_xyzw * torch.tensor([1, 1, 1, -1])
-        obj_t_cam_rotm = quat_xyzw_to_rotm(obj_t_cam_quat_xyzw)
+        world_t_obj_trans = pose[0:3]
+        world_t_obj_quat_xyzw = pose[3:7]
+        world_t_cam_trans = camera_pose[0:3]
+        world_t_cam_quat_xyzw = camera_pose[3:7]
 
-        obj_pos = torch.matmul(obj_t_cam_rotm, cam_pos) - cam_t_obj_trans.unsqueeze(1)
+        # world_t_cam = SE3.Rt(
+        #     UnitQuaternion(s=float(world_t_cam_quat_xyzw[3]), v=(float(world_t_cam_quat_xyzw[0]), float(world_t_cam_quat_xyzw[1]), float(world_t_cam_quat_xyzw[2]))).R,
+        #     world_t_cam_trans.numpy(),
+        # )
+        # world_t_cam.plot()
 
+        # world_t_obj = SE3.Rt(
+        #     UnitQuaternion(s=float(world_t_obj_quat_xyzw[3]), v=world_t_obj_quat_xyzw[0:3].numpy()).R,
+        #     world_t_obj_trans.numpy(),
+        # )
+        # world_t_obj.plot()
+
+        world_t_cam_rotm = quat_xyzw_to_rotm(world_t_cam_quat_xyzw)
+        world_t_obj_rotm = quat_xyzw_to_rotm(world_t_obj_quat_xyzw)
+
+        obj_t_world_rotm = torch.transpose(world_t_obj_rotm, dim0=0, dim1=1)
+        obj_t_world_trans = -torch.matmul(obj_t_world_rotm, world_t_obj_trans)
+
+        world_pos = torch.matmul(world_t_cam_rotm, cam_pos) + world_t_cam_trans.unsqueeze(1)
+
+        obj_pos = torch.matmul(obj_t_world_rotm, world_pos) + obj_t_world_trans.unsqueeze(1)
+
+        world_pos = world_pos.reshape(3, h, w)
         obj_pos = obj_pos.reshape(3, h, w)
 
-        position_map[detection_i] = obj_pos
+        position_map = torch.where(seg_map == classifications[detection_i], obj_pos, position_map)
 
     return position_map
 

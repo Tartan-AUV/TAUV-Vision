@@ -23,17 +23,14 @@ class Pointnet(nn.Module):
             for _ in range(self._config.n_pointnet_layers_post_upsample)
         ])
 
-        self._point_output_layer = nn.Conv2d(config.feature_depth, config.n_prototype_points, kernel_size=1, stride=1)
-        self._direction_output_layer = nn.Conv2d(config.feature_depth, config.n_prototype_points, kernel_size=1, stride=1)
+        self._position_map_layer = nn.Conv2d(config.feature_depth, 3 * config.n_prototype_position_maps, kernel_size=1, stride=1)
 
-    def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, ...):
+    def forward(self, fpn_output: torch.Tensor) -> torch.Tensor:
         x = self._pre_upsample_layers(fpn_output)
         x = F.interpolate(x, scale_factor=2, mode="bilinear")
         x = self._post_upsample_layers(x)
 
-        point_output = self._point_output_layer(x)
-        point_output = F.sigmoid(point_output)
-        direction_output = self._direction_output_layer(x)
-        direction_output = torch.clamp(direction_output, -pi, pi)
+        position_map = self._position_map_layer(x)
+        position_map = position_map.reshape(position_map.size(0), -1, 3, position_map.size(2), position_map.size(3))
 
-        return point_output, direction_output
+        return position_map

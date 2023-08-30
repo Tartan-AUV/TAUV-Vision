@@ -35,16 +35,16 @@ class YoloPose(nn.Module):
         fpn_outputs = self._feature_pyramid(backbone_outputs)
 
         mask_prototype = self._masknet(fpn_outputs[0])
-        point_prototype, direction_prototype = self._pointnet(fpn_outputs[0])
+        position_map_prototype = self._pointnet(fpn_outputs[0])
 
         classifications = []
         box_encodings = []
         mask_coeffs = []
-        point_coeffs = []
+        position_map_coeffs = []
         anchors = []
 
         for fpn_i, fpn_output in enumerate(fpn_outputs):
-            classification, box_encoding, mask_coeff, point_coeff = self._prediction_head(fpn_output)
+            classification, box_encoding, mask_coeff, position_map_coeff = self._prediction_head(fpn_output)
 
             anchor = get_anchor(fpn_i, tuple(fpn_output.size()[2:4]), self._config).detach()
             anchor = anchor.to(box_encoding.device)
@@ -52,16 +52,16 @@ class YoloPose(nn.Module):
             classifications.append(classification)
             box_encodings.append(box_encoding)
             mask_coeffs.append(mask_coeff)
-            point_coeffs.append(point_coeff)
+            position_map_coeffs.append(position_map_coeff)
             anchors.append(anchor)
 
         classification = torch.cat(classifications, dim=1)
         box_encoding = torch.cat(box_encodings, dim=1)
         mask_coeff = torch.cat(mask_coeffs, dim=1)
-        point_coeff = torch.cat(point_coeffs, dim=1)
+        position_map_coeff = torch.cat(position_map_coeffs, dim=1)
         anchor = torch.cat(anchors, dim=1)
 
-        return classification, box_encoding, mask_coeff, point_coeff, anchor, mask_prototype, point_prototype, direction_prototype
+        return classification, box_encoding, mask_coeff, position_map_coeff, anchor, mask_prototype, position_map_prototype
 
 
 def main():
@@ -71,8 +71,7 @@ def main():
         feature_depth=256,
         n_classes=3,
         n_prototype_masks=32,
-        n_prototype_points=64,
-        n_points=8,
+        n_prototype_position_maps=32,
         n_masknet_layers_pre_upsample=1,
         n_masknet_layers_post_upsample=1,
         n_pointnet_layers_pre_upsample=1,
@@ -111,7 +110,7 @@ def main():
         [1, 2],
         [1, 2],
         [1, 2],
-    ]).to(device)
+    ], dtype=torch.uint8).to(device)
     truth_box = torch.tensor([
         [
             [0.5, 0.5, 0.5, 0.5],
@@ -138,14 +137,24 @@ def main():
             [0.7, 0.7, 0.3, 0.3],
         ],
     ]).to(device)
-    truth_mask = torch.zeros(6, 2, config.in_h, config.in_w).to(device)
-    for batch_i in range(truth_mask.size(0)):
-        for detection_i in range(truth_mask.size(1)):
-            truth_mask[batch_i, detection_i] = box_to_mask(truth_box[batch_i, detection_i], (config.in_h, config.in_w))
-    truth_point = torch.zeros(6, 2, 9, config.in_h, config.in_w).to(device)
-    truth_direction = torch.full((6, 2, 8, config.in_h, config.in_w), 1, dtype=torch.float).to(device)
+    truth_seg_map = torch.zeros(6, config.in_h, config.in_w, dtype=torch.uint8).to(device)
+    for batch_i in range(truth_seg_map.size(0)):
+        for detection_i in range(truth_classification.size(1)):
+            truth_seg_map[batch_i, box_to_mask(truth_box[batch_i, detection_i], (config.in_h, config.in_w)).to(torch.bool)] = truth_classification[batch_i, detection_i]
 
-    truth = (truth_valid, truth_classification, truth_box, truth_mask, truth_point, truth_direction)
+    truth_position = torch.zeros(6, 3, config.in_h, config.in_w).to(device)
+
+    x_coords = torch.linspace(-10, 10, config.in_w)
+    y_coords = torch.linspace(-10, 10, config.in_h)
+
+    x_grid, y_grid = torch.meshgrid(y_coords, x_coords)
+
+    coordinates = torch.stack([y_grid, x_grid, torch.full(y_grid.size(), fill_value=0, dtype=torch.float)], dim=0)
+
+    for batch_i in range(truth_position.size(0)):
+        truth_position[batch_i] = coordinates
+
+    truth = (truth_valid, truth_classification, truth_box, truth_seg_map, truth_position)
 
     model.train()
 
@@ -154,9 +163,9 @@ def main():
     l = loss(prediction, truth, config)
     total_loss, _ = l
 
-    make_dot(total_loss, params=dict(model.named_parameters()), show_attrs=True, show_saved=True).render("dag", format="svg")
+    # make_dot(total_loss, params=dict(model.named_parameters()), show_attrs=True, show_saved=True).render("dag", format="svg")
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
 
     for iteration_i in range(1000):
         optimizer.zero_grad()
@@ -170,6 +179,11 @@ def main():
         total_loss.backward()
 
         optimizer.step()
+
+        if total_loss < 0.01:
+            break
+
+    pass
 
 
 if __name__ == "__main__":

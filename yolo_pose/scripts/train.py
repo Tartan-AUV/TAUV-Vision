@@ -3,21 +3,23 @@ from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from typing import List
+from pathlib import Path
 
 from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample
 
+torch.autograd.set_detect_anomaly(True)
+
 
 config = Config(
-    in_w=512,
-    in_h=512,
+    in_w=960,
+    in_h=480,
     feature_depth=256,
-    n_classes=21,
+    n_classes=23,
     n_prototype_masks=32,
-    n_prototype_points=64,
-    n_points=8,
+    n_prototype_position_maps=32,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
     n_pointnet_layers_pre_upsample=1,
@@ -35,8 +37,9 @@ lr = 1e-2
 momentum = 0.9
 weight_decay = 0.9
 n_epochs = 1000
+weight_save_interval = 10
 train_split = 0.9
-batch_size = 4
+batch_size = 12
 
 hue_jitter = 0.5
 saturation_jitter = 0.5
@@ -54,6 +57,7 @@ trainval_environments = [
 ]
 
 falling_things_root = "~/Documents/falling_things/fat"
+results_root = "~/Documents/yolo_pose_runs"
 
 def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
     n_detections = [sample.valid.size(0) for sample in samples]
@@ -84,59 +88,54 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
         F.pad(sample.projected_cuboids, (0, 0, 0, 0, 0, max_n_detections - sample.projected_cuboids.size(0)), value=False)
         for sample in samples
     ], dim=0)
+    camera_pose = torch.stack([sample.camera_pose for sample in samples], dim=0)
     img = torch.stack([sample.img for sample in samples], dim=0)
-    seg = torch.stack([sample.seg for sample in samples], dim=0)
-    depth = torch.stack([sample.depth for sample in samples], dim=0)
+    seg_map = torch.stack([sample.seg_map for sample in samples], dim=0)
+    depth_map = torch.stack([sample.depth_map for sample in samples], dim=0)
+    position_map = torch.stack([sample.position_map for sample in samples], dim=0)
 
     sample = FallingThingsSample(
         intrinsics=intrinsics,
         valid=valid,
         classifications=classifications,
         bounding_boxes=bounding_boxes,
+        camera_pose=camera_pose,
         poses=poses,
         cuboids=cuboids,
         projected_cuboids=projected_cuboids,
         img=img,
-        seg=seg,
-        depth=depth,
+        seg_map=seg_map,
+        depth_map=depth_map,
+        position_map=position_map,
     )
 
     return sample
 
 
 def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
-    # TODO Crop all of these, and apply basic color transformations to img
-
-    # crop_transforms = transforms.Compose([
-    #     transforms.Resize(min(config.in_h, config.in_w), interpolation=transforms.InterpolationMode.BILINEAR),
-    #     transforms.CenterCrop((config.in_h, config.in_w)),
-    # ])
-    #
-    # seg_crop_transforms = transforms.Compose([
-    #     transforms.Resize(min(config.in_h, config.in_w), interpolation=transforms.InterpolationMode.NEAREST),
-    #     transforms.CenterCrop((config.in_h, config.in_w)),
-    # ])
-
     color_transforms = transforms.Compose([
         transforms.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter),
         transforms.Normalize(mean=img_mean, std=img_stddev),
     ])
 
     img = color_transforms(sample.img)
-    seg = sample.seg
-    depth = sample.depth
+    seg_map = sample.seg_map
+    depth_map = sample.depth_map
+    position_map = sample.position_map
 
     transformed_sample = FallingThingsSample(
         intrinsics=sample.intrinsics,
         valid=sample.valid,
         classifications=sample.classifications,
         bounding_boxes=sample.bounding_boxes,
+        camera_pose=sample.camera_pose,
         poses=sample.poses,
         cuboids=sample.cuboids,
         projected_cuboids=sample.projected_cuboids,
         img=img,
-        seg=seg,
-        depth=depth,
+        seg_map=seg_map,
+        depth_map=depth_map,
+        position_map=position_map,
     )
 
     return transformed_sample
@@ -155,27 +154,53 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
             batch.valid.to(device),
             batch.classifications.to(device),
             batch.bounding_boxes.to(device),
-            batch.seg.to(device),
-            None,
-            None,
+            batch.seg_map.to(device),
+            batch.position_map.to(device),
         )
 
         prediction = model.forward(img)
 
-        total_loss, (classification_loss, box_loss) = loss(prediction, truth, config)
+        total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
 
         print(f"total loss: {float(total_loss)}")
-        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
 
         total_loss.backward()
 
         optimizer.step()
 
+
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
     model.eval()
 
+    avg_losses = torch.zeros(5, dtype=torch.float)
+    n_batch = torch.zeros(1, dtype=torch.float)
+
     for batch_i, batch in enumerate(data_loader):
         print(f"val epoch {epoch_i}, batch {batch_i}")
+
+        with torch.no_grad():
+            img = batch.img.to(device)
+            truth = (
+                batch.valid.to(device),
+                batch.classifications.to(device),
+                batch.bounding_boxes.to(device),
+                batch.seg_map.to(device),
+                batch.position_map.to(device),
+            )
+
+            prediction = model.forward(img)
+
+            total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
+
+        print(f"total loss: {float(total_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
+
+        avg_losses += torch.Tensor((total_loss, classification_loss, box_loss, mask_loss, position_map_loss))
+        n_batch += 1
+
+    avg_losses /= n_batch
+    avg_total_loss, avg_classification_loss, avg_box_loss, avg_mask_loss, avg_position_map_loss = avg_losses
 
 
 def main():
@@ -201,23 +226,25 @@ def main():
         train_dataset,
         batch_size=batch_size,
         collate_fn=collate_samples,
+        shuffle=True,
+        num_workers=4,
     )
 
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         collate_fn=collate_samples,
+        shuffle=True,
+        num_workers=4,
     )
 
     for epoch_i in range(n_epochs):
+        if epoch_i > 0 and epoch_i % weight_save_interval == 0:
+            torch.save(model.state_dict(), Path(results_root) / f"{epoch_i}.pt")
+
         run_train_epoch(epoch_i, model, optimizer, train_dataloader, device)
 
         run_validation_epoch(epoch_i, model, val_dataloader, device)
-
-        if epoch_i % 10 == 0:
-            # Save shit
-            pass
-
 
 
 if __name__ == "__main__":
