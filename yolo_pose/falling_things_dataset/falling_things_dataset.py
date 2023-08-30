@@ -7,10 +7,17 @@ from pathlib import Path
 from enum import Enum
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
-# from spatialmath import SE3, Quaternion, UnitQuaternion, SO3
+from spatialmath import SE3, Quaternion, UnitQuaternion, SO3
+import numpy as np
+from scipy.spatial.transform import Rotation
+from math import cos, sin, pi
 
 from yolo_pose.model.boxes import corners_to_box, box_to_corners
 
+def closest_rotation_matrix(matrix):
+    U, _, Vt = np.linalg.svd(matrix)
+    R = np.dot(U, Vt)
+    return R
 
 class FallingThingsVariant(Enum):
     SINGLE = "single"
@@ -59,7 +66,7 @@ class FallingThingsObject(Enum):
     FoamBrick = "061_foam_brick_16k"
 
 
-falling_things_object_ids = {member.value: index for index, member in enumerate(FallingThingsObject)}
+falling_things_object_ids = {member.value: index + 1 for index, member in enumerate(FallingThingsObject)}
 
 
 @dataclass
@@ -206,6 +213,10 @@ class FallingThingsDataset(Dataset):
         camera_pose = left_data["camera_data"]["location_worldframe"] + left_data["camera_data"]["quaternion_xyzw_worldframe"]
         camera_pose = torch.Tensor(camera_pose)
         camera_pose[0:3] /= 100
+        # pose_permutation = torch.Tensor([[0, 0, 1], [1, 0, 0], [0, -1, 0]])
+        # camera_pose[0:3] = torch.matmul(pose_permutation, camera_pose[0:3])
+        # camera_pose[3:6] = torch.matmul(pose_permutation, camera_pose[3:6])
+        print(camera_pose)
 
         poses = [
             object["location"] + object["quaternion_xyzw"] for object in left_data["objects"]
@@ -331,11 +342,11 @@ def main():
     x, y, z = mixed_sample.position_map
 
     plt.figure()
-    plt.imshow(x)
+    plt.imshow(torch.where(x == 0, torch.nan, x))
     plt.figure()
-    plt.imshow(y)
+    plt.imshow(torch.where(y == 0, torch.nan, y))
     plt.figure()
-    plt.imshow(z)
+    plt.imshow(torch.where(z == 0, torch.nan, z))
 
     plt.show()
 
@@ -347,7 +358,10 @@ def get_position_map(camera_pose: torch.Tensor,
                      depth_map: torch.Tensor,
                      intrinsics: torch.Tensor,
                      ) -> torch.Tensor:
+    import matplotlib.pyplot as plt
     # Shape n_detections x 3 x h x w
+    print(camera_pose)
+
     n_detections = poses.size()[0]
     h, w = depth_map.size()
 
@@ -355,8 +369,6 @@ def get_position_map(camera_pose: torch.Tensor,
 
     for detection_i in range(n_detections):
         pose = poses[detection_i]
-
-        # SE3().plot()
 
         cam_z = depth_map.reshape(-1)
         cam_pixel_x = torch.arange(0, w).repeat(h)
@@ -367,34 +379,16 @@ def get_position_map(camera_pose: torch.Tensor,
 
         cam_pos = torch.stack((cam_x, cam_y, cam_z), dim=0)
 
-        world_t_obj_trans = pose[0:3]
-        world_t_obj_quat_xyzw = pose[3:7]
-        world_t_cam_trans = camera_pose[0:3]
-        world_t_cam_quat_xyzw = camera_pose[3:7]
+        cam_t_obj_trans = pose[0:3]
+        cam_t_obj_quat_xyzw = pose[3:7]
 
-        # world_t_cam = SE3.Rt(
-        #     UnitQuaternion(s=float(world_t_cam_quat_xyzw[3]), v=(float(world_t_cam_quat_xyzw[0]), float(world_t_cam_quat_xyzw[1]), float(world_t_cam_quat_xyzw[2]))).R,
-        #     world_t_cam_trans.numpy(),
-        # )
-        # world_t_cam.plot()
+        cam_t_obj_rotm = quat_xyzw_to_rotm(cam_t_obj_quat_xyzw)
 
-        # world_t_obj = SE3.Rt(
-        #     UnitQuaternion(s=float(world_t_obj_quat_xyzw[3]), v=world_t_obj_quat_xyzw[0:3].numpy()).R,
-        #     world_t_obj_trans.numpy(),
-        # )
-        # world_t_obj.plot()
+        obj_t_cam_rotm = torch.transpose(cam_t_obj_rotm, dim0=0, dim1=1)
+        obj_t_cam_trans = -torch.matmul(obj_t_cam_rotm, cam_t_obj_trans)
 
-        world_t_cam_rotm = quat_xyzw_to_rotm(world_t_cam_quat_xyzw)
-        world_t_obj_rotm = quat_xyzw_to_rotm(world_t_obj_quat_xyzw)
+        obj_pos = torch.matmul(obj_t_cam_rotm, cam_pos) + obj_t_cam_trans.unsqueeze(1)
 
-        obj_t_world_rotm = torch.transpose(world_t_obj_rotm, dim0=0, dim1=1)
-        obj_t_world_trans = -torch.matmul(obj_t_world_rotm, world_t_obj_trans)
-
-        world_pos = torch.matmul(world_t_cam_rotm, cam_pos) + world_t_cam_trans.unsqueeze(1)
-
-        obj_pos = torch.matmul(obj_t_world_rotm, world_pos) + obj_t_world_trans.unsqueeze(1)
-
-        world_pos = world_pos.reshape(3, h, w)
         obj_pos = obj_pos.reshape(3, h, w)
 
         position_map = torch.where(seg_map == classifications[detection_i], obj_pos, position_map)
