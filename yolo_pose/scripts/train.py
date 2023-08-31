@@ -202,6 +202,10 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
     avg_losses /= n_batch
     avg_total_loss, avg_classification_loss, avg_box_loss, avg_mask_loss, avg_position_map_loss = avg_losses
 
+    print("validation averages:")
+    print(f"total loss: {float(avg_total_loss)}")
+    print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, position map loss: {float(avg_position_map_loss)}")
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -239,8 +243,8 @@ def main():
     )
 
     for epoch_i in range(n_epochs):
-        if epoch_i > 0 and epoch_i % weight_save_interval == 0:
-            torch.save(model.state_dict(), Path(results_root) / f"{epoch_i}.pt")
+        if epoch_i % weight_save_interval == 0:
+            torch.save(model.state_dict(), Path(results_root).expanduser() / f"{epoch_i}.pt")
 
         run_train_epoch(epoch_i, model, optimizer, train_dataloader, device)
 

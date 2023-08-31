@@ -150,6 +150,6 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
 
     position_map_loss = position_map_losses.sum() / positive_match.sum()
 
-    total_loss = classification_loss + box_loss + mask_loss + position_map_loss
+    total_loss = classification_loss + box_loss + mask_loss + 10 * position_map_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss, position_map_loss)

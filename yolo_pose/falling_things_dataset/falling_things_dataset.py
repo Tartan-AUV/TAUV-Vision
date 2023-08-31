@@ -165,6 +165,8 @@ class FallingThingsDataset(Dataset):
     def __getitem__(self, i: int) -> (torch.Tensor, ...):
         id_path = self._id_paths[i]
 
+        print(f"loading {id_path}...")
+
         camera_json_path = id_path.with_name("_camera_settings.json")
         object_json_path = id_path.with_name("_object_settings.json")
 
@@ -213,10 +215,6 @@ class FallingThingsDataset(Dataset):
         camera_pose = left_data["camera_data"]["location_worldframe"] + left_data["camera_data"]["quaternion_xyzw_worldframe"]
         camera_pose = torch.Tensor(camera_pose)
         camera_pose[0:3] /= 100
-        # pose_permutation = torch.Tensor([[0, 0, 1], [1, 0, 0], [0, -1, 0]])
-        # camera_pose[0:3] = torch.matmul(pose_permutation, camera_pose[0:3])
-        # camera_pose[3:6] = torch.matmul(pose_permutation, camera_pose[3:6])
-        print(camera_pose)
 
         poses = [
             object["location"] + object["quaternion_xyzw"] for object in left_data["objects"]
@@ -360,7 +358,6 @@ def get_position_map(camera_pose: torch.Tensor,
                      ) -> torch.Tensor:
     import matplotlib.pyplot as plt
     # Shape n_detections x 3 x h x w
-    print(camera_pose)
 
     n_detections = poses.size()[0]
     h, w = depth_map.size()
