@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 
 from yolo_pose.model.config import Config
+from yolo_pose.model.weights import initialize_weights
 from yolo_pose.model.backbone import Resnet101Backbone
 from yolo_pose.model.feature_pyramid import FeaturePyramid
 from yolo_pose.model.masknet import Masknet
@@ -13,7 +14,6 @@ from yolo_pose.model.prediction_head import PredictionHead
 from yolo_pose.model.anchors import get_anchor
 from yolo_pose.model.loss import loss
 from yolo_pose.model.boxes import box_to_mask
-from torchviz import make_dot
 
 
 class YoloPose(nn.Module):
@@ -66,10 +66,10 @@ class YoloPose(nn.Module):
 
 def main():
     config = Config(
-        in_w=512,
-        in_h=512,
+        in_w=960,
+        in_h=480,
         feature_depth=256,
-        n_classes=3,
+        n_classes=4,
         n_prototype_masks=32,
         n_prototype_position_maps=32,
         n_masknet_layers_pre_upsample=1,
@@ -88,28 +88,23 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = YoloPose(config).to(device)
+    initialize_weights(model, [model._backbone])
 
-    cmu_img = Image.open("../../img/cmu.png").convert("RGB")
-    img = transforms.ToTensor()(cmu_img).to(device)
-    img = img.unsqueeze(0).tile((6, 1, 1, 1))
+    img0 = Image.open("../../img/000000.left.jpg").convert("RGB")
+    img0 = transforms.ToTensor()(img0).to(device)
+    img1 = Image.open("../../img/000001.left.jpg").convert("RGB")
+    img1 = transforms.ToTensor()(img1).to(device)
+    img = torch.stack((img0, img1), dim=0)
 
     # img = torch.rand(3, 3, config.in_h, config.in_w).to(device)
 
     truth_valid = torch.tensor([
         [True, True],
         [True, True],
-        [True, True],
-        [True, True],
-        [True, True],
-        [True, True],
     ]).to(device)
     truth_classification = torch.tensor([
         [1, 2],
-        [1, 2],
-        [1, 2],
-        [1, 2],
-        [1, 2],
-        [1, 2],
+        [3, 4],
     ], dtype=torch.uint8).to(device)
     truth_box = torch.tensor([
         [
@@ -117,37 +112,21 @@ def main():
             [0.7, 0.7, 0.3, 0.3],
         ],
         [
-            [0.5, 0.5, 0.5, 0.5],
-            [0.7, 0.7, 0.3, 0.3],
-        ],
-        [
-            [0.5, 0.5, 0.5, 0.5],
-            [0.7, 0.7, 0.3, 0.3],
-        ],
-        [
-            [0.5, 0.5, 0.5, 0.5],
-            [0.7, 0.7, 0.3, 0.3],
-        ],
-        [
-            [0.5, 0.5, 0.5, 0.5],
-            [0.7, 0.7, 0.3, 0.3],
-        ],
-        [
-            [0.5, 0.5, 0.5, 0.5],
-            [0.7, 0.7, 0.3, 0.3],
+            [0.6, 0.6, 0.3, 0.3],
+            [0.2, 0.2, 0.5, 0.5],
         ],
     ]).to(device)
-    truth_seg_map = torch.zeros(6, config.in_h, config.in_w, dtype=torch.uint8).to(device)
+    truth_seg_map = torch.zeros(2, config.in_h, config.in_w, dtype=torch.uint8).to(device)
     for batch_i in range(truth_seg_map.size(0)):
         for detection_i in range(truth_classification.size(1)):
             truth_seg_map[batch_i, box_to_mask(truth_box[batch_i, detection_i], (config.in_h, config.in_w)).to(torch.bool)] = truth_classification[batch_i, detection_i]
 
-    truth_position = torch.zeros(6, 3, config.in_h, config.in_w).to(device)
+    truth_position = torch.zeros(2, 3, config.in_h, config.in_w).to(device)
 
     x_coords = torch.linspace(-10, 10, config.in_w)
     y_coords = torch.linspace(-10, 10, config.in_h)
 
-    x_grid, y_grid = torch.meshgrid(y_coords, x_coords)
+    y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
 
     coordinates = torch.stack([y_grid, x_grid, torch.full(y_grid.size(), fill_value=0, dtype=torch.float)], dim=0)
 

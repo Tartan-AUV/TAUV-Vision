@@ -18,7 +18,7 @@ class PredictionHead(nn.Module):
         ])
 
         self._classification_layer = nn.Conv2d(
-            config.feature_depth, len(config.anchor_aspect_ratios) * config.n_classes, kernel_size=1, stride=1,
+            config.feature_depth, len(config.anchor_aspect_ratios) * (config.n_classes + 1), kernel_size=1, stride=1,
         )
         self._box_encoding_layer = nn.Conv2d(
             config.feature_depth, len(config.anchor_aspect_ratios) * 4, kernel_size=1, stride=1,
@@ -37,7 +37,7 @@ class PredictionHead(nn.Module):
 
         classification = self._classification_layer(x)
         classification = classification.permute(0, 2, 3, 1)
-        classification = classification.reshape(classification.size(0), -1, self._config.n_classes)
+        classification = classification.reshape(classification.size(0), -1, self._config.n_classes + 1)
 
         box_encoding = self._box_encoding_layer(x)
         box_encoding = box_encoding.permute(0, 2, 3, 1)
@@ -56,5 +56,6 @@ class PredictionHead(nn.Module):
         position_map_coeff = position_map_coeff.reshape(
             position_map_coeff.size(0), -1, self._config.n_prototype_position_maps
         )
+        position_map_coeff = F.tanh(position_map_coeff)
 
         return classification, box_encoding, mask_coeff, position_map_coeff

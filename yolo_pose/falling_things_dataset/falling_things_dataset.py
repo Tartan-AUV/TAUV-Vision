@@ -7,10 +7,7 @@ from pathlib import Path
 from enum import Enum
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
-from spatialmath import SE3, Quaternion, UnitQuaternion, SO3
 import numpy as np
-from scipy.spatial.transform import Rotation
-from math import cos, sin, pi
 
 from yolo_pose.model.boxes import corners_to_box, box_to_corners
 

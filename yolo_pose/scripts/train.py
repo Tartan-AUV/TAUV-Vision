@@ -4,10 +4,13 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 from typing import List
 from pathlib import Path
+from dataclasses import asdict
+import wandb
 
 from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose
+from yolo_pose.model.weights import initialize_weights
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample
 
 torch.autograd.set_detect_anomaly(True)
@@ -33,13 +36,13 @@ config = Config(
     negative_example_ratio=3,
 )
 
-lr = 1e-2
+lr = 1e-3
 momentum = 0.9
 weight_decay = 0.9
 n_epochs = 1000
 weight_save_interval = 10
 train_split = 0.9
-batch_size = 12
+batch_size = 1
 
 hue_jitter = 0.5
 saturation_jitter = 0.5
@@ -56,7 +59,7 @@ trainval_environments = [
     FallingThingsEnvironment.Kitchen4,
 ]
 
-falling_things_root = "~/Documents/falling_things/fat"
+falling_things_root = "/Volumes/Storage/falling_things/fat"
 results_root = "~/Documents/yolo_pose_runs"
 
 def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
@@ -158,7 +161,7 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
             batch.position_map.to(device),
         )
 
-        prediction = model.forward(img)
+        prediction = model(img)
 
         total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
 
@@ -168,6 +171,8 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         total_loss.backward()
 
         optimizer.step()
+
+        wandb.log({"train_total_loss": total_loss})
 
 
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
@@ -193,6 +198,8 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
 
             total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
 
+            wandb.log({"val_total_loss": total_loss})
+
         print(f"total loss: {float(total_loss)}")
         print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
 
@@ -206,11 +213,36 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
     print(f"total loss: {float(avg_total_loss)}")
     print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, position map loss: {float(avg_position_map_loss)}")
 
+    wandb.log({"val_avg_total_loss": avg_total_loss})
+
 
 def main():
+    wandb.init(
+        project="yolo_pose",
+        config={
+            **asdict(config),
+            "lr": lr,
+            "momentum": momentum,
+            "weight_decay": weight_decay,
+            "n_epochs": n_epochs,
+            "weight_save_interval": weight_save_interval,
+            "train_split": train_split,
+            "batch_size": batch_size,
+            "hue_jitter": hue_jitter,
+            "saturation_jitter": saturation_jitter,
+            "brightness_jitter": brightness_jitter,
+            "img_mean": img_mean,
+            "img_stddev": img_stddev,
+            "trainval_environments": trainval_environments,
+        },
+    )
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = YoloPose(config).to(device)
+    initialize_weights(model, [model._backbone])
+
+    wandb.watch(model, log="all", log_freq=1)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
 
@@ -222,7 +254,9 @@ def main():
         transform_sample
     )
 
-    train_size = int(train_split * len(trainval_dataset))
+    # train_size = int(train_split * len(trainval_dataset))
+    # val_size = len(trainval_dataset) - train_size
+    train_size = 1
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 
@@ -248,7 +282,7 @@ def main():
 
         run_train_epoch(epoch_i, model, optimizer, train_dataloader, device)
 
-        run_validation_epoch(epoch_i, model, val_dataloader, device)
+        # run_validation_epoch(epoch_i, model, val_dataloader, device)
 
 
 if __name__ == "__main__":

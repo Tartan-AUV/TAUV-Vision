@@ -74,7 +74,7 @@ def iou_matrix(box_a: torch.Tensor, box_b: torch.Tensor) -> torch.Tensor:
 def box_to_mask(box, img_size):
     y_grid = torch.arange(0, img_size[0], dtype=torch.float, device=box.device)
     x_grid = torch.arange(0, img_size[1], dtype=torch.float, device=box.device)
-    x_coords, y_coords = torch.meshgrid(x_grid, y_grid)
+    y_coords, x_coords = torch.meshgrid(y_grid, x_grid, indexing='ij')
 
     box = box * torch.tensor([img_size[0], img_size[1], img_size[0], img_size[1]], device=box.device)
 

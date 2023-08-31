@@ -144,12 +144,12 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
             )
             l1_loss = l1_loss.reshape(match_position_map.size())
 
-            position_map_loss += (truth_match_mask_resized.unsqueeze(0) * l1_loss).sum() / truth_match_mask_resized.sum()
+            position_map_loss += (truth_match_mask_resized.unsqueeze(0) * l1_loss).sum() / (3 * truth_match_mask_resized.sum())
 
         position_map_losses[batch_i] = position_map_loss
 
     position_map_loss = position_map_losses.sum() / positive_match.sum()
 
-    total_loss = classification_loss + box_loss + mask_loss + 10 * position_map_loss
+    total_loss = classification_loss + 10 * box_loss + mask_loss + position_map_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss, position_map_loss)

@@ -13,9 +13,9 @@ class Resnet101Backbone(nn.Module):
 
         self._config = config
 
-        self._resnet_101 = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
+        resnet_101 = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
 
-        self._feature_extractor = models.feature_extraction.create_feature_extractor(self._resnet_101, return_nodes=[
+        self._feature_extractor = models.feature_extraction.create_feature_extractor(resnet_101, return_nodes=[
             "layer2.3.conv2", "layer3.22.conv2", "layer4.2.conv2"
         ])
 
