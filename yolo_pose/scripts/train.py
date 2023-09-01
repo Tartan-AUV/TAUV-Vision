@@ -40,20 +40,24 @@ config = Config(
 lr = 1e-3
 momentum = 0.9
 weight_decay = 0
-n_epochs = 1000
+n_epochs = 100
 weight_save_interval = 10
 train_split = 0.9
 batch_size = 12
 
-hue_jitter = 0
-saturation_jitter = 0
-brightness_jitter = 0
+hue_jitter = 0.2
+saturation_jitter = 0.2
+brightness_jitter = 0.2
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
 
 trainval_environments = [
     FallingThingsEnvironment.Kitchen0,
+    FallingThingsEnvironment.Kitchen1,
+    FallingThingsEnvironment.Kitchen2,
+    FallingThingsEnvironment.Kitchen3,
+    FallingThingsEnvironment.Kitchen4,
 ]
 
 trainval_objects = [
@@ -303,6 +307,12 @@ def main():
         run_train_epoch(epoch_i, model, optimizer, train_dataloader, device)
 
         run_validation_epoch(epoch_i, model, val_dataloader, device)
+
+    save_path = save_dir / f"{epoch_i}.pt"
+    torch.save(model.state_dict(), save_path)
+    artifact = wandb.Artifact('model', type='model')
+    artifact.add_dir(save_dir)
+    wandb.log_artifact(artifact)
 
 
 if __name__ == "__main__":

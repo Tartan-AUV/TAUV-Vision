@@ -23,20 +23,20 @@ class FallingThingsVariant(Enum):
 
 class FallingThingsEnvironment(Enum):
     Kitchen0 = "kitchen_0"
-    Kitchen1 = "kitchen_0"
-    Kitchen2 = "kitchen_0"
-    Kitchen3 = "kitchen_0"
-    Kitchen4 = "kitchen_0"
+    Kitchen1 = "kitchen_1"
+    Kitchen2 = "kitchen_2"
+    Kitchen3 = "kitchen_3"
+    Kitchen4 = "kitchen_4"
     KiteDemo0 = "kitedemo_0"
     KiteDemo1 = "kitedemo_1"
     KiteDemo2 = "kitedemo_2"
     KiteDemo3 = "kitedemo_3"
     KiteDemo4 = "kitedemo_4"
     Temple0 = "temple_0"
-    Temple1 = "temple_0"
-    Temple2 = "temple_0"
-    Temple3 = "temple_0"
-    Temple4 = "temple_0"
+    Temple1 = "temple_1"
+    Temple2 = "temple_2"
+    Temple3 = "temple_3"
+    Temple4 = "temple_4"
 
 
 class FallingThingsObject(Enum):
@@ -175,6 +175,11 @@ class FallingThingsDataset(Dataset):
         camera_data = self._get_json(camera_json_path)
         object_data = self._get_json(object_json_path)
         left_data = self._get_json(left_json_path)
+
+        if len(left_data["objects"]) == 0:
+            # Return the empty sample
+            # TODO: FIX THIS
+            return self[(i + 1) % len(self)]
 
         to_tensor = transforms.ToTensor()
 
