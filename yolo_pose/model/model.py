@@ -69,7 +69,7 @@ def main():
         in_w=960,
         in_h=480,
         feature_depth=256,
-        n_classes=4,
+        n_classes=23,
         n_prototype_masks=32,
         n_prototype_position_maps=32,
         n_masknet_layers_pre_upsample=1,
@@ -108,12 +108,12 @@ def main():
     ], dtype=torch.uint8).to(device)
     truth_box = torch.tensor([
         [
-            [0.5, 0.5, 0.5, 0.5],
-            [0.7, 0.7, 0.3, 0.3],
+            [0.5, 0.5, 0.1, 0.1],
+            [0.7, 0.7, 0.1, 0.1],
         ],
         [
-            [0.6, 0.6, 0.3, 0.3],
-            [0.2, 0.2, 0.5, 0.5],
+            [0.6, 0.6, 0.1, 0.1],
+            [0.2, 0.2, 0.1, 0.1],
         ],
     ]).to(device)
     truth_seg_map = torch.zeros(2, config.in_h, config.in_w, dtype=torch.uint8).to(device)

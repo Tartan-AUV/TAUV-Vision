@@ -23,8 +23,9 @@ def get_anchor(fpn_i: int, fpn_size: (int, int), config: Config):
     ws = []
     scale = config.anchor_scales[fpn_i]
     for aspect_ratio in config.anchor_aspect_ratios:
-        h = (scale / config.in_h) * sqrt(aspect_ratio)
-        w = (scale / config.in_w) / sqrt(aspect_ratio)
+        in_size = (config.in_h + config.in_w) / 2
+        h = (scale / in_size) * sqrt(aspect_ratio)
+        w = (scale / in_size) / sqrt(aspect_ratio)
 
         h = torch.full((1, fpn_size[0] * fpn_size[1]), h)
         w = torch.full((1, fpn_size[0] * fpn_size[1]), w)

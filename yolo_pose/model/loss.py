@@ -39,8 +39,11 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
         n_positive_match = positive_match[batch_i].sum()
         n_selected_negative_match = config.negative_example_ratio * n_positive_match
 
+        background_confidence = F.softmax(classification[batch_i], dim=-1)[:, 0]
+
+        # Maybe change how I'm selecting these negative matches?
         _, selected_negative_match_index = torch.topk(
-            torch.where(negative_match[batch_i], classification_cross_entropy, 0),
+            torch.where(negative_match[batch_i], -background_confidence, -torch.inf),
             k=n_selected_negative_match
         )
         selected_negative_match_index = selected_negative_match_index.detach()

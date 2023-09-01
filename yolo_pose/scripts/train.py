@@ -1,4 +1,5 @@
 import torch
+import os
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 import torchvision.transforms as transforms
@@ -11,7 +12,7 @@ from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose
 from yolo_pose.model.weights import initialize_weights
-from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample
+from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -38,28 +39,28 @@ config = Config(
 
 lr = 1e-3
 momentum = 0.9
-weight_decay = 0.9
+weight_decay = 0
 n_epochs = 1000
 weight_save_interval = 10
 train_split = 0.9
-batch_size = 1
+batch_size = 12
 
-hue_jitter = 0.5
-saturation_jitter = 0.5
-brightness_jitter = 0.5
+hue_jitter = 0
+saturation_jitter = 0
+brightness_jitter = 0
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
 
 trainval_environments = [
     FallingThingsEnvironment.Kitchen0,
-    FallingThingsEnvironment.Kitchen1,
-    FallingThingsEnvironment.Kitchen2,
-    FallingThingsEnvironment.Kitchen3,
-    FallingThingsEnvironment.Kitchen4,
 ]
 
-falling_things_root = "/Volumes/Storage/falling_things/fat"
+trainval_objects = [
+    FallingThingsObject.CrackerBox,
+]
+
+falling_things_root = "~/Documents/falling_things/fat"
 results_root = "~/Documents/yolo_pose_runs"
 
 def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
@@ -173,6 +174,10 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         optimizer.step()
 
         wandb.log({"train_total_loss": total_loss})
+        wandb.log({"train_classification_loss": classification_loss})
+        wandb.log({"train_box_loss": box_loss})
+        wandb.log({"train_mask_loss": mask_loss})
+        wandb.log({"train_position_map_loss": position_map_loss})
 
 
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
@@ -199,6 +204,10 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
             total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
 
             wandb.log({"val_total_loss": total_loss})
+            wandb.log({"val_classification_loss": classification_loss})
+            wandb.log({"val_box_loss": box_loss})
+            wandb.log({"val_mask_loss": mask_loss})
+            wandb.log({"val_position_map_loss": position_map_loss})
 
         print(f"total loss: {float(total_loss)}")
         print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
@@ -214,9 +223,17 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
     print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, position map loss: {float(avg_position_map_loss)}")
 
     wandb.log({"val_avg_total_loss": avg_total_loss})
+    wandb.log({"val_avg_classification_loss": avg_classification_loss})
+    wandb.log({"val_avg_box_loss": avg_box_loss})
+    wandb.log({"val_avg_mask_loss": avg_mask_loss})
+    wandb.log({"val_avg_position_map_loss": avg_position_map_loss})
 
 
 def main():
+    save_dir = Path(results_root).expanduser()
+    for checkpoint in save_dir.iterdir():
+        checkpoint.unlink()
+
     wandb.init(
         project="yolo_pose",
         config={
@@ -238,6 +255,7 @@ def main():
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
 
     model = YoloPose(config).to(device)
     initialize_weights(model, [model._backbone])
@@ -248,15 +266,13 @@ def main():
 
     trainval_dataset = FallingThingsDataset(
         falling_things_root,
-        FallingThingsVariant.MIXED,
+        FallingThingsVariant.SINGLE,
         trainval_environments,
-        None,
+        trainval_objects,
         transform_sample
     )
 
-    # train_size = int(train_split * len(trainval_dataset))
-    # val_size = len(trainval_dataset) - train_size
-    train_size = 1
+    train_size = int(train_split * len(trainval_dataset))
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 
@@ -278,11 +294,15 @@ def main():
 
     for epoch_i in range(n_epochs):
         if epoch_i % weight_save_interval == 0:
-            torch.save(model.state_dict(), Path(results_root).expanduser() / f"{epoch_i}.pt")
+            save_path = save_dir / f"{epoch_i}.pt"
+            torch.save(model.state_dict(), save_path)
+            artifact = wandb.Artifact('model', type='model')
+            artifact.add_dir(save_dir)
+            wandb.log_artifact(artifact)
 
         run_train_epoch(epoch_i, model, optimizer, train_dataloader, device)
 
-        # run_validation_epoch(epoch_i, model, val_dataloader, device)
+        run_validation_epoch(epoch_i, model, val_dataloader, device)
 
 
 if __name__ == "__main__":
