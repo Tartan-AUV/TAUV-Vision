@@ -18,18 +18,32 @@ class PredictionHead(nn.Module):
         ])
 
         self._classification_layer = nn.Conv2d(
-            config.feature_depth, len(config.anchor_aspect_ratios) * (config.n_classes + 1), kernel_size=1, stride=1,
+            config.feature_depth,
+            len(config.anchor_aspect_ratios) * (config.n_classes + 1),
+            kernel_size=3,
+            padding=1,
+            stride=1,
         )
         self._box_encoding_layer = nn.Conv2d(
-            config.feature_depth, len(config.anchor_aspect_ratios) * 4, kernel_size=1, stride=1,
+            config.feature_depth,
+            len(config.anchor_aspect_ratios) * 4,
+            kernel_size=3,
+            padding=1,
+            stride=1,
         )
         self._mask_coeff_layer = nn.Conv2d(
-            config.feature_depth, len(config.anchor_aspect_ratios) * config.n_prototype_masks, kernel_size=1, stride=1,
+            config.feature_depth,
+            len(config.anchor_aspect_ratios) * config.n_prototype_masks,
+            kernel_size=3,
+            padding=1,
+            stride=1,
         )
         self._position_map_coeff_layer = nn.Conv2d(
             config.feature_depth,
             len(config.anchor_aspect_ratios) * config.n_prototype_position_maps,
-            kernel_size=1, stride=1,
+            kernel_size=3,
+            padding=1,
+            stride=1,
         )
 
     def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, ...):
@@ -42,7 +56,7 @@ class PredictionHead(nn.Module):
         box_encoding = self._box_encoding_layer(x)
         box_encoding = box_encoding.permute(0, 2, 3, 1)
         box_encoding = box_encoding.reshape(box_encoding.size(0), -1, 4)
-        box_encoding[:, :, 2:4] = 2 * (F.sigmoid(box_encoding[:, :, 2:4]) - 0.5)
+        box_encoding[:, :, 0:2] = F.sigmoid(box_encoding[:, :, 0:2]) - 0.5
         box_encoding[:, :, 0] /= x.size(2)
         box_encoding[:, :, 1] /= x.size(3)
 
