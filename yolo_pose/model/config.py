@@ -9,7 +9,7 @@ class Config:
 
     n_classes: int
     n_prototype_masks: int
-    n_prototype_position_maps: int
+    n_point_maps: int
 
     n_masknet_layers_pre_upsample: int
     n_masknet_layers_post_upsample: int

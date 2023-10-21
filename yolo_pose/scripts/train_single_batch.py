@@ -23,7 +23,7 @@ config = Config(
     feature_depth=256,
     n_classes=23,
     n_prototype_masks=32,
-    n_prototype_position_maps=32,
+    n_point_maps=32,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
     n_pointnet_layers_pre_upsample=1,
@@ -168,10 +168,10 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
 
         prediction = model(img)
 
-        total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
+        total_loss, (classification_loss, box_loss, mask_loss, point_loss) = loss(prediction, truth, config)
 
         print(f"total loss: {float(total_loss)}")
-        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, point loss: {float(point_loss)}")
 
         total_loss.backward()
 
@@ -184,7 +184,7 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         wandb.log({"train_classification_loss": classification_loss})
         wandb.log({"train_box_loss": box_loss})
         wandb.log({"train_mask_loss": mask_loss})
-        wandb.log({"train_position_map_loss": position_map_loss})
+        wandb.log({"train_point_loss": point_loss})
 
 
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
@@ -208,32 +208,32 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
 
             prediction = model.forward(img)
 
-            total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
+            total_loss, (classification_loss, box_loss, mask_loss, point_loss) = loss(prediction, truth, config)
 
             wandb.log({"val_total_loss": total_loss})
             wandb.log({"val_classification_loss": classification_loss})
             wandb.log({"val_box_loss": box_loss})
             wandb.log({"val_mask_loss": mask_loss})
-            wandb.log({"val_position_map_loss": position_map_loss})
+            wandb.log({"val_point_loss": point_loss})
 
         print(f"total loss: {float(total_loss)}")
-        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, point loss: {float(point_loss)}")
 
-        avg_losses += torch.Tensor((total_loss, classification_loss, box_loss, mask_loss, position_map_loss))
+        avg_losses += torch.Tensor((total_loss, classification_loss, box_loss, mask_loss, point_loss))
         n_batch += 1
 
     avg_losses /= n_batch
-    avg_total_loss, avg_classification_loss, avg_box_loss, avg_mask_loss, avg_position_map_loss = avg_losses
+    avg_total_loss, avg_classification_loss, avg_box_loss, avg_mask_loss, avg_point_loss = avg_losses
 
     print("validation averages:")
     print(f"total loss: {float(avg_total_loss)}")
-    print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, position map loss: {float(avg_position_map_loss)}")
+    print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, point loss: {float(avg_point_loss)}")
 
     wandb.log({"val_avg_total_loss": avg_total_loss})
     wandb.log({"val_avg_classification_loss": avg_classification_loss})
     wandb.log({"val_avg_box_loss": avg_box_loss})
     wandb.log({"val_avg_mask_loss": avg_mask_loss})
-    wandb.log({"val_avg_position_map_loss": avg_position_map_loss})
+    wandb.log({"val_avg_point_loss": avg_point_loss})
 
 
 def main():
@@ -286,8 +286,8 @@ def main():
         transform_sample
     )
 
-    train_size = int(train_split * len(trainval_dataset))
-    # train_size = 12
+    # train_size = int(train_split * len(trainval_dataset))
+    train_size = batch_size
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 
@@ -317,7 +317,7 @@ def main():
 
         run_train_epoch(epoch_i, model, optimizer, scheduler, train_dataloader, device)
 
-        run_validation_epoch(epoch_i, model, val_dataloader, device)
+        # run_validation_epoch(epoch_i, model, val_dataloader, device)
 
     save_path = save_dir / f"{epoch_i}.pt"
     torch.save(model.state_dict(), save_path)

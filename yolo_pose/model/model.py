@@ -35,16 +35,16 @@ class YoloPose(nn.Module):
         fpn_outputs = self._feature_pyramid(backbone_outputs)
 
         mask_prototype = self._masknet(fpn_outputs[0])
-        position_map_prototype = self._pointnet(fpn_outputs[0])
+        point_map = self._pointnet(fpn_outputs[0])
 
         classifications = []
         box_encodings = []
         mask_coeffs = []
-        position_map_coeffs = []
+        point_map_positions = []
         anchors = []
 
         for fpn_i, fpn_output in enumerate(fpn_outputs):
-            classification, box_encoding, mask_coeff, position_map_coeff = self._prediction_head(fpn_output)
+            classification, box_encoding, mask_coeff, point_map_position = self._prediction_head(fpn_output)
 
             anchor = get_anchor(fpn_i, tuple(fpn_output.size()[2:4]), self._config).detach()
             anchor = anchor.to(box_encoding.device)
@@ -52,16 +52,16 @@ class YoloPose(nn.Module):
             classifications.append(classification)
             box_encodings.append(box_encoding)
             mask_coeffs.append(mask_coeff)
-            position_map_coeffs.append(position_map_coeff)
+            point_map_positions.append(point_map_position)
             anchors.append(anchor)
 
         classification = torch.cat(classifications, dim=1)
         box_encoding = torch.cat(box_encodings, dim=1)
         mask_coeff = torch.cat(mask_coeffs, dim=1)
-        position_map_coeff = torch.cat(position_map_coeffs, dim=1)
+        point_map_position = torch.cat(point_map_positions, dim=1)
         anchor = torch.cat(anchors, dim=1)
 
-        return classification, box_encoding, mask_coeff, position_map_coeff, anchor, mask_prototype, position_map_prototype
+        return classification, box_encoding, mask_coeff, point_map_position, anchor, mask_prototype, point_map
 
 
 def main():

@@ -38,9 +38,9 @@ class PredictionHead(nn.Module):
             padding=1,
             stride=1,
         )
-        self._position_map_coeff_layer = nn.Conv2d(
+        self._point_map_position_layer = nn.Conv2d(
             config.feature_depth,
-            len(config.anchor_aspect_ratios) * config.n_prototype_position_maps,
+            len(config.anchor_aspect_ratios) * config.n_point_maps * 3,
             kernel_size=3,
             padding=1,
             stride=1,
@@ -65,11 +65,8 @@ class PredictionHead(nn.Module):
         mask_coeff = mask_coeff.reshape(mask_coeff.size(0), -1, self._config.n_prototype_masks)
         mask_coeff = F.tanh(mask_coeff)
 
-        position_map_coeff = self._position_map_coeff_layer(x)
-        position_map_coeff = position_map_coeff.permute(0, 2, 3, 1)
-        position_map_coeff = position_map_coeff.reshape(
-            position_map_coeff.size(0), -1, self._config.n_prototype_position_maps
-        )
-        position_map_coeff = F.tanh(position_map_coeff)
+        point_map_position = self._point_map_position_layer(x)
+        point_map_position = point_map_position.permute(0, 2, 3, 1)
+        point_map_position = point_map_position.reshape(point_map_position.size(0), -1, self._config.n_point_maps, 3)
 
-        return classification, box_encoding, mask_coeff, position_map_coeff
+        return classification, box_encoding, mask_coeff, point_map_position

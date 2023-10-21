@@ -29,7 +29,7 @@ config = Config(
     negative_example_ratio=3,
 )
 
-falling_things_root = "/Volumes/Storage/falling_things/fat"
+falling_things_root = "~/Documents/falling_things/fat"
 weights_root = "~/Documents/yolo_pose/weights"
 
 test_environments = [
@@ -99,7 +99,7 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
 
 def main():
     model = YoloPose(config)
-    model.load_state_dict(torch.load(Path(weights_root).expanduser() / "99.pt", map_location=torch.device("cpu")))
+    model.load_state_dict(torch.load(Path(weights_root).expanduser() / "90.pt", map_location=torch.device("cpu")))
 
     test_dataset = FallingThingsDataset(
         falling_things_root,
