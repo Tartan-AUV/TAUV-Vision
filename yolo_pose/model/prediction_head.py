@@ -38,9 +38,16 @@ class PredictionHead(nn.Module):
             padding=1,
             stride=1,
         )
-        self._point_map_position_layer = nn.Conv2d(
+        self._belief_coeff_layer = nn.Conv2d(
             config.feature_depth,
-            len(config.anchor_aspect_ratios) * config.n_point_maps * 3,
+            len(config.anchor_aspect_ratios) * config.belief_depth * config.prototype_belief_depth,
+            kernel_size=3,
+            padding=1,
+            stride=1,
+        )
+        self._affinity_coeff_layer = nn.Conv2d(
+            config.feature_depth,
+            len(config.anchor_aspect_ratios) * config.affinity_depth * config.prototype_affinity_depth,
             kernel_size=3,
             padding=1,
             stride=1,
@@ -65,8 +72,14 @@ class PredictionHead(nn.Module):
         mask_coeff = mask_coeff.reshape(mask_coeff.size(0), -1, self._config.n_prototype_masks)
         mask_coeff = F.tanh(mask_coeff)
 
-        point_map_position = self._point_map_position_layer(x)
-        point_map_position = point_map_position.permute(0, 2, 3, 1)
-        point_map_position = point_map_position.reshape(point_map_position.size(0), -1, self._config.n_point_maps, 3)
+        belief_coeff = self._belief_coeff_layer(x)
+        belief_coeff = belief_coeff.permute(0, 2, 3, 1)
+        belief_coeff = belief_coeff.reshape(belief_coeff.size(0), -1, self._config.belief_depth, self._config.prototype_belief_depth)
+        belief_coeff = F.tanh(belief_coeff)
 
-        return classification, box_encoding, mask_coeff, point_map_position
+        affinity_coeff = self._affinity_coeff_layer(x)
+        affinity_coeff = affinity_coeff.permute(0, 2, 3, 1)
+        affinity_coeff = affinity_coeff.reshape(affinity_coeff.size(0), -1, self._config.affinity_depth, self._config.prototype_affinity_depth)
+        affinity_coeff = F.tanh(affinity_coeff)
+
+        return classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff

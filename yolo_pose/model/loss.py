@@ -8,8 +8,8 @@ from yolo_pose.model.config import Config
 
 
 def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Config) -> (torch.Tensor, (torch.Tensor, ...)):
-    classification, box_encoding, mask_coeff, point_map_position, anchor, mask_prototype, point_map = prediction
-    truth_valid, truth_classification, truth_box, truth_seg_map, truth_position_map = truth
+    classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototype, affinity_prototype = prediction
+    truth_valid, truth_classification, truth_box, truth_seg_map, truth_belief, truth_affinity = truth
 
     device = classification.device
 
@@ -113,72 +113,67 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
 
     mask_loss = mask_losses.sum() / positive_match.sum()
 
-    point_losses = torch.zeros(n_batch, device=device)
+    # Now predict coeffs for belief and affinity
+    # Assemble in the same way masks are assembled
+    # Take loss for each truth detection and average
+
+    belief_losses = torch.zeros(n_batch, device=device)
+    affinity_losses = torch.zeros(n_batch, device=device)
 
     for batch_i in range(n_batch):
-        point_loss = torch.tensor(0, dtype=torch.float, device=device)
+        belief_loss = torch.tensor(0, dtype=torch.float, device=device)
+        affinity_loss = torch.tensor(0, dtype=torch.float, device=device)
 
         for match_i in positive_match[batch_i].nonzero():
             match_i = int(match_i)
 
-            truth_match_mask = (truth_seg_map[batch_i] == truth_classification[
-                batch_i, match_index[batch_i, match_i]]).float()
-            truth_match_mask_resized = F.interpolate(
-                truth_match_mask.unsqueeze(0).unsqueeze(0),
-                point_map.size()[2:4],
-                mode="nearest",
-            ).squeeze(0).squeeze(0)
-            truth_match_position_map = truth_position_map[batch_i]
-            truth_match_position_map_resized = F.interpolate(
-                truth_match_position_map.unsqueeze(0),
-                point_map.size()[2:4],
-                mode="nearest",
+            match_belief = torch.matmul(
+                belief_coeff[batch_i, match_i],
+                belief_prototype[batch_i].reshape(belief_prototype.size(1), -1)
+            ).reshape(belief_coeff.size(2), belief_prototype.size(2), belief_prototype.size(3))
+            match_belief = torch.clamp(F.sigmoid(match_belief), min=1e-4)
+            match_affinity = torch.matmul(
+                affinity_coeff[batch_i, match_i],
+                affinity_prototype[batch_i].reshape(affinity_prototype.size(1), -1)
+            ).reshape(affinity_coeff.size(2), affinity_prototype.size(2), affinity_prototype.size(3))
+            match_affinity = 2 * (torch.clamp(F.sigmoid(match_affinity), min=1e-4) - 0.5)
+
+            truth_match_belief = truth_belief[batch_i, match_index[batch_i, match_i]]
+            truth_match_affinity = truth_affinity[batch_i, match_index[batch_i, match_i]]
+
+            truth_match_belief_resized = F.interpolate(
+                truth_match_belief.unsqueeze(0),
+                match_belief.size()[1:3],
+                mode="bilinear",
             ).squeeze(0)
 
-            if truth_match_mask_resized.sum() == 0:
-                continue
+            truth_match_affinity_resized = F.interpolate(
+                truth_match_affinity.unsqueeze(0),
+                match_affinity.size()[1:3],
+                mode="bilinear",
+            ).squeeze(0)
 
-            y_coords, x_coords = torch.meshgrid(
-                torch.linspace(0, 1, point_map.size()[2], device=point_map.device),
-                torch.linspace(0, 1, point_map.size()[3], device=point_map.device),
-                indexing='ij'
+            belief_l1_loss = F.mse_loss(
+                match_belief,
+                truth_match_belief_resized,
+                reduction="none",
             )
 
-            for map_i in range(config.n_point_maps):
-                pred_position = point_map_position[batch_i, match_i, map_i]
+            affinity_l1_loss = F.mse_loss(
+                match_affinity,
+                truth_match_affinity_resized,
+                reduction="none",
+            )
 
-                centroid_y = (point_map[batch_i, map_i] * y_coords).sum() / (point_map[batch_i, map_i]).sum()
-                centroid_y = torch.clamp(centroid_y, 0.05, 0.95)
-                centroid_x = (point_map[batch_i, map_i] * x_coords).sum() / (point_map[batch_i, map_i]).sum()
-                centroid_x = torch.clamp(centroid_x, 0.05, 0.95)
+            belief_loss += belief_l1_loss.mean()
+            affinity_loss += affinity_l1_loss.mean()
 
-                # Check if centroid_y, centroid_x is within truth match mask resized
+        belief_losses[batch_i] = belief_loss
+        affinity_losses[batch_i] = affinity_loss
 
-                centroid_y_px = int(centroid_y * truth_match_position_map_resized.size(1))
-                centroid_x_px = int(centroid_x * truth_match_position_map_resized.size(2))
-                if truth_match_mask_resized[centroid_y_px, centroid_x_px]:
-                    map_position = truth_match_position_map_resized[:, centroid_y_px, centroid_x_px]
+    belief_loss = belief_losses.sum() / positive_match.sum()
+    affinity_loss = affinity_losses.sum() / positive_match.sum()
 
-                    position_loss = F.smooth_l1_loss(pred_position, map_position, reduction="none")
-                else:
-                    # TODO: Make this distance from centroid_y, centroid_x to closest point in mask
-                    position_loss = torch.tensor([0], dtype=torch.float, device=point_loss.device)
+    total_loss = classification_loss + box_loss + mask_loss + belief_loss + affinity_loss
 
-                centroid_distance = torch.sqrt((y_coords - centroid_y) ** 2 + (x_coords - centroid_x) ** 2)
-                spread_loss = F.smooth_l1_loss(
-                    centroid_distance.reshape(-1),
-                    torch.zeros_like(centroid_distance.reshape(-1), dtype=torch.float, device=centroid_distance.device),
-                )
-
-                # Penalize spread outside of the mask from centroid inside the mask.
-
-                point_loss += position_loss.mean()
-                point_loss += spread_loss.mean()
-
-        point_losses[batch_i] = point_loss
-
-    point_loss = point_losses.sum() / positive_match.sum()
-
-    total_loss = classification_loss + box_loss + mask_loss + point_loss
-
-    return total_loss, (classification_loss, box_loss, mask_loss, point_loss)
+    return total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss)

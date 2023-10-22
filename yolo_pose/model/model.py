@@ -1,4 +1,5 @@
 import torch
+torch.autograd.detect_anomaly(check_nan=True)
 import torch.nn as nn
 from PIL import Image
 import torch.nn.functional as F
@@ -35,16 +36,17 @@ class YoloPose(nn.Module):
         fpn_outputs = self._feature_pyramid(backbone_outputs)
 
         mask_prototype = self._masknet(fpn_outputs[0])
-        point_map = self._pointnet(fpn_outputs[0])
+        belief_prototype, affinity_prototype = self._pointnet(fpn_outputs[0])
 
         classifications = []
         box_encodings = []
         mask_coeffs = []
-        point_map_positions = []
+        belief_coeffs = []
+        affinity_coeffs = []
         anchors = []
 
         for fpn_i, fpn_output in enumerate(fpn_outputs):
-            classification, box_encoding, mask_coeff, point_map_position = self._prediction_head(fpn_output)
+            classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff = self._prediction_head(fpn_output)
 
             anchor = get_anchor(fpn_i, tuple(fpn_output.size()[2:4]), self._config).detach()
             anchor = anchor.to(box_encoding.device)
@@ -52,16 +54,18 @@ class YoloPose(nn.Module):
             classifications.append(classification)
             box_encodings.append(box_encoding)
             mask_coeffs.append(mask_coeff)
-            point_map_positions.append(point_map_position)
+            belief_coeffs.append(belief_coeff)
+            affinity_coeffs.append(affinity_coeff)
             anchors.append(anchor)
 
         classification = torch.cat(classifications, dim=1)
         box_encoding = torch.cat(box_encodings, dim=1)
         mask_coeff = torch.cat(mask_coeffs, dim=1)
-        point_map_position = torch.cat(point_map_positions, dim=1)
+        belief_coeff = torch.cat(belief_coeffs, dim=1)
+        affinity_coeff = torch.cat(affinity_coeffs, dim=1)
         anchor = torch.cat(anchors, dim=1)
 
-        return classification, box_encoding, mask_coeff, point_map_position, anchor, mask_prototype, point_map
+        return classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototype, affinity_prototype
 
 
 def main():
@@ -71,11 +75,21 @@ def main():
         feature_depth=256,
         n_classes=23,
         n_prototype_masks=32,
-        n_prototype_position_maps=32,
         n_masknet_layers_pre_upsample=1,
         n_masknet_layers_post_upsample=1,
-        n_pointnet_layers_pre_upsample=1,
-        n_pointnet_layers_post_upsample=1,
+        pointnet_layers=[
+            (1, 3, 6, 512),
+            (3, 7, 10, 128),
+            (3, 7, 10, 128),
+            (3, 7, 10, 128),
+            (3, 7, 10, 128),
+            (3, 7, 10, 128),
+        ],
+        pointnet_feature_depth=128,
+        prototype_belief_depth=18,
+        prototype_affinity_depth=32,
+        belief_depth=9,
+        affinity_depth=16,
         n_prediction_head_layers=1,
         n_fpn_downsample_layers=2,
         anchor_scales=(24, 48, 96, 192, 384),
@@ -121,19 +135,11 @@ def main():
         for detection_i in range(truth_classification.size(1)):
             truth_seg_map[batch_i, box_to_mask(truth_box[batch_i, detection_i], (config.in_h, config.in_w)).to(torch.bool)] = truth_classification[batch_i, detection_i]
 
-    truth_position = torch.zeros(2, 3, config.in_h, config.in_w).to(device)
+    truth_belief = torch.zeros(2, 2, config.belief_depth, config.in_h, config.in_w).to(device)
+    truth_belief[:, :, :, 0:config.in_h // 2, :] = 1
+    truth_affinity = torch.zeros(2, 2, config.affinity_depth, config.in_h, config.in_w).to(device)
 
-    x_coords = torch.linspace(-10, 10, config.in_w)
-    y_coords = torch.linspace(-10, 10, config.in_h)
-
-    y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
-
-    coordinates = torch.stack([y_grid, x_grid, torch.full(y_grid.size(), fill_value=0, dtype=torch.float)], dim=0)
-
-    for batch_i in range(truth_position.size(0)):
-        truth_position[batch_i] = coordinates
-
-    truth = (truth_valid, truth_classification, truth_box, truth_seg_map, truth_position)
+    truth = (truth_valid, truth_classification, truth_box, truth_seg_map, truth_belief, truth_affinity)
 
     model.train()
 
@@ -141,8 +147,6 @@ def main():
 
     l = loss(prediction, truth, config)
     total_loss, _ = l
-
-    # make_dot(total_loss, params=dict(model.named_parameters()), show_attrs=True, show_saved=True).render("dag", format="svg")
 
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
 

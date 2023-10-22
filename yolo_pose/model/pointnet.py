@@ -13,24 +13,77 @@ class Pointnet(nn.Module):
 
         self._config = config
 
-        self._pre_upsample_layers = nn.Sequential(*[
-            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=3, stride=1, padding=1)
-            for _ in range(self._config.n_pointnet_layers_pre_upsample)
-        ])
+        belief_stages = []
+        affinity_stages = []
 
-        self._post_upsample_layers = nn.Sequential(*[
-            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=3, stride=1, padding=1)
-            for _ in range(self._config.n_pointnet_layers_post_upsample)
-        ])
+        for i, layer_config in enumerate(config.pointnet_layers):
+            in_depth = config.feature_depth if i == 0 else \
+                config.feature_depth + config.prototype_belief_depth + config.prototype_affinity_depth
 
-        self._point_map_layer = nn.Conv2d(config.feature_depth, config.n_point_maps, kernel_size=1, stride=1)
+            belief_stage = self._create_stage(
+                in_depth,
+                config.prototype_belief_depth,
+                layer_config,
+            )
+            affinity_stage = self._create_stage(
+                in_depth,
+                config.prototype_affinity_depth,
+                layer_config,
+            )
 
-    def forward(self, fpn_output: torch.Tensor) -> torch.Tensor:
-        x = self._pre_upsample_layers(fpn_output)
-        x = F.interpolate(x, scale_factor=2, mode="bilinear")
-        x = self._post_upsample_layers(x)
+            belief_stages.append(belief_stage)
+            affinity_stages.append(affinity_stage)
 
-        point_map = self._point_map_layer(x)
-        point_map = F.sigmoid(point_map)
+        self._belief_stages = nn.ModuleList(belief_stages)
+        self._affinity_stages = nn.ModuleList(affinity_stages)
 
-        return point_map
+    def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, torch.Tensor):
+
+        belief = self._belief_stages[0].forward(fpn_output)
+        affinity = self._affinity_stages[0].forward(fpn_output)
+
+        for (belief_stage, affinity_stage) in zip(self._belief_stages[1:], self._affinity_stages[1:]):
+            belief = belief_stage.forward(torch.cat((belief, affinity, fpn_output), dim=1))
+            affinity = affinity_stage.forward(torch.cat((belief, affinity, fpn_output), dim=1))
+
+        return belief, affinity
+
+    def _create_stage(self, in_depth, out_depth, layer_config) -> nn.Module:
+        padding, kernel_size, layer_count, final_depth = layer_config
+        layers = []
+
+        layers.append(nn.Conv2d(
+            in_depth,
+            self._config.pointnet_feature_depth,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+        ))
+
+        for i in range(layer_count - 2):
+            layers.append(nn.ReLU())
+            layers.append(nn.Conv2d(
+                self._config.pointnet_feature_depth,
+                self._config.pointnet_feature_depth,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=padding
+            ))
+
+        layers.append(nn.ReLU())
+        layers.append(nn.Conv2d(
+            self._config.pointnet_feature_depth,
+            final_depth,
+            kernel_size=1,
+            stride=1
+        ))
+
+        layers.append(nn.ReLU())
+        layers.append(nn.Conv2d(
+            final_depth,
+            out_depth,
+            kernel_size=1,
+            stride=1
+        ))
+
+        return nn.Sequential(*layers)

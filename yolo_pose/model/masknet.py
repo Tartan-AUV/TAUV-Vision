@@ -29,6 +29,6 @@ class Masknet(nn.Module):
         x = F.interpolate(x, scale_factor=2, mode="bilinear")
         x = self._post_upsample_layers(x)
         x = self._output_layer(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
 
         return x
