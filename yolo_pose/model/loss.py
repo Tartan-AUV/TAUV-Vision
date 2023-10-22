@@ -132,6 +132,8 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
                 belief_prototype[batch_i].reshape(belief_prototype.size(1), -1)
             ).reshape(belief_coeff.size(2), belief_prototype.size(2), belief_prototype.size(3))
             match_belief = torch.clamp(F.sigmoid(match_belief), min=1e-4)
+            # max_belief, _ = torch.max(match_belief.reshape(match_belief.size(0), -1), dim=1)
+            # match_belief /= max_belief.unsqueeze(1).unsqueeze(2)
             match_affinity = torch.matmul(
                 affinity_coeff[batch_i, match_i],
                 affinity_prototype[batch_i].reshape(affinity_prototype.size(1), -1)
@@ -153,20 +155,20 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
                 mode="bilinear",
             ).squeeze(0)
 
-            belief_l1_loss = F.mse_loss(
+            belief_loss_map = F.mse_loss(
                 match_belief,
                 truth_match_belief_resized,
                 reduction="none",
             )
 
-            affinity_l1_loss = F.mse_loss(
+            affinity_loss_map = F.mse_loss(
                 match_affinity,
                 truth_match_affinity_resized,
                 reduction="none",
             )
 
-            belief_loss += belief_l1_loss.mean()
-            affinity_loss += affinity_l1_loss.mean()
+            belief_loss += belief_loss_map.mean()
+            affinity_loss += affinity_loss_map.mean()
 
         belief_losses[batch_i] = belief_loss
         affinity_losses[batch_i] = affinity_loss
@@ -174,6 +176,6 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
     belief_loss = belief_losses.sum() / positive_match.sum()
     affinity_loss = affinity_losses.sum() / positive_match.sum()
 
-    total_loss = classification_loss + box_loss + mask_loss + belief_loss + affinity_loss
+    total_loss = classification_loss + box_loss + mask_loss + 100 * belief_loss + 100 * affinity_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss)

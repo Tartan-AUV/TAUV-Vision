@@ -49,7 +49,9 @@ class Pointnet(nn.Module):
         return belief, affinity
 
     def _create_stage(self, in_depth, out_depth, layer_config) -> nn.Module:
-        padding, kernel_size, layer_count, final_depth = layer_config
+        kernel_size, layer_count, final_depth = layer_config
+        padding = kernel_size // 2
+
         layers = []
 
         layers.append(nn.Conv2d(
@@ -61,7 +63,7 @@ class Pointnet(nn.Module):
         ))
 
         for i in range(layer_count - 2):
-            layers.append(nn.ReLU())
+            layers.append(nn.LeakyReLU())
             layers.append(nn.Conv2d(
                 self._config.pointnet_feature_depth,
                 self._config.pointnet_feature_depth,
@@ -70,7 +72,7 @@ class Pointnet(nn.Module):
                 padding=padding
             ))
 
-        layers.append(nn.ReLU())
+        layers.append(nn.LeakyReLU())
         layers.append(nn.Conv2d(
             self._config.pointnet_feature_depth,
             final_depth,
@@ -78,12 +80,13 @@ class Pointnet(nn.Module):
             stride=1
         ))
 
-        layers.append(nn.ReLU())
+        layers.append(nn.LeakyReLU())
         layers.append(nn.Conv2d(
             final_depth,
             out_depth,
             kernel_size=1,
             stride=1
         ))
+        layers.append(nn.LeakyReLU())
 
         return nn.Sequential(*layers)

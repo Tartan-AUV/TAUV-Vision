@@ -79,7 +79,6 @@ class FallingThingsSample:
     img: torch.Tensor
     seg_map: torch.Tensor
     depth_map: torch.Tensor
-    position_map: torch.Tensor
 
 
 class FallingThingsDataset(Dataset):
@@ -245,7 +244,7 @@ class FallingThingsDataset(Dataset):
         bounding_boxes = corners_to_box(corners.unsqueeze(0)).squeeze(0)
 
         # TODO: Do the funky math here
-        position_map = get_position_map(camera_pose, poses, classifications, seg, depth, intrinsics)
+        # position_map = get_position_map(camera_pose, poses, classifications, seg, depth, intrinsics)
 
         sample = FallingThingsSample(
             intrinsics=intrinsics,
@@ -259,7 +258,7 @@ class FallingThingsDataset(Dataset):
             img=img,
             seg_map=seg,
             depth_map=depth,
-            position_map=position_map,
+            # position_map=position_map,
         )
 
         return sample

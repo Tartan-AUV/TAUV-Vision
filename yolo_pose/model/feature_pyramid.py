@@ -51,8 +51,8 @@ class FeaturePyramid(nn.Module):
 
         prediction_outputs = [None] * (self._n_in + self._config.n_fpn_downsample_layers)
         for i in range(self._n_in):
-            prediction_outputs[i] = F.relu(self._prediction_layers[i](pyramid_outputs[i]))
+            prediction_outputs[i] = F.leaky_relu(self._prediction_layers[i](pyramid_outputs[i]))
         for i in range(self._config.n_fpn_downsample_layers):
-            prediction_outputs[self._n_in + i] = F.relu(self._downsample_layers[i](prediction_outputs[self._n_in + i - 1]))
+            prediction_outputs[self._n_in + i] = F.leaky_relu(self._downsample_layers[i](prediction_outputs[self._n_in + i - 1]))
 
         return tuple(prediction_outputs)

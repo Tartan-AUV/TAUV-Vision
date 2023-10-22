@@ -10,7 +10,7 @@ import wandb
 
 from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
-from yolo_pose.model.model import YoloPose
+from yolo_pose.model.model import YoloPose, create_belief, create_affinity
 from yolo_pose.model.weights import initialize_weights
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
 
@@ -23,11 +23,21 @@ config = Config(
     feature_depth=256,
     n_classes=23,
     n_prototype_masks=32,
-    n_point_maps=32,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
-    n_pointnet_layers_pre_upsample=1,
-    n_pointnet_layers_post_upsample=1,
+    pointnet_layers=[
+        (3, 6, 512),
+        (7, 10, 128),
+        (7, 10, 128),
+        (7, 10, 128),
+        (7, 10, 128),
+        (7, 10, 128),
+    ],
+    pointnet_feature_depth=128,
+    prototype_belief_depth=9,
+    prototype_affinity_depth=32,
+    belief_depth=9,
+    affinity_depth=16,
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
     anchor_scales=(24, 48, 96, 192, 384),
@@ -37,13 +47,14 @@ config = Config(
     negative_example_ratio=3,
 )
 
-lr = 1e-3
+sigma=50
+lr = 1e-4
 momentum = 0.9
 weight_decay = 0
 n_epochs = 500
 weight_save_interval = 10
 train_split = 0.9
-batch_size = 12
+batch_size = 4
 
 hue_jitter = 0.2
 saturation_jitter = 0.2
@@ -100,7 +111,6 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
     img = torch.stack([sample.img for sample in samples], dim=0)
     seg_map = torch.stack([sample.seg_map for sample in samples], dim=0)
     depth_map = torch.stack([sample.depth_map for sample in samples], dim=0)
-    position_map = torch.stack([sample.position_map for sample in samples], dim=0)
 
     sample = FallingThingsSample(
         intrinsics=intrinsics,
@@ -114,7 +124,6 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
         img=img,
         seg_map=seg_map,
         depth_map=depth_map,
-        position_map=position_map,
     )
 
     return sample
@@ -129,7 +138,6 @@ def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
     img = color_transforms(sample.img)
     seg_map = sample.seg_map
     depth_map = sample.depth_map
-    position_map = sample.position_map
 
     transformed_sample = FallingThingsSample(
         intrinsics=sample.intrinsics,
@@ -143,7 +151,6 @@ def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
         img=img,
         seg_map=seg_map,
         depth_map=depth_map,
-        position_map=position_map,
     )
 
     return transformed_sample
@@ -158,33 +165,51 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         optimizer.zero_grad()
 
         img = batch.img.to(device)
+        size = torch.tensor([img.size(2), img.size(3)], device=device)
+        points = batch.projected_cuboids.to(device)
+        bounding_boxes = batch.bounding_boxes.to(device)
+
+        belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
+        for batch_i in range(points.size(0)):
+            for match_i in range(points.size(1)):
+                center = bounding_boxes[batch_i, match_i][0:2] * size
+                belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], sigma, device=device)
+                belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), sigma, device=device)
+
+        affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
+        for batch_i in range(points.size(0)):
+            for match_i in range(points.size(1)):
+                center = bounding_boxes[batch_i, match_i][0:2] * size
+                affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center, device=device)
+
         truth = (
             batch.valid.to(device),
             batch.classifications.to(device),
             batch.bounding_boxes.to(device),
             batch.seg_map.to(device),
-            batch.position_map.to(device),
+            belief,
+            affinity,
         )
 
         prediction = model(img)
 
-        total_loss, (classification_loss, box_loss, mask_loss, point_loss) = loss(prediction, truth, config)
+        total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss) = loss(prediction, truth, config)
 
         print(f"total loss: {float(total_loss)}")
-        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, point loss: {float(point_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, belief loss: {float(belief_loss)}, affinity loss: {float(affinity_loss)}")
 
         total_loss.backward()
 
         optimizer.step()
         scheduler.step(epoch_i)
 
-        wandb.log({"learning_rate": optimizer.param_groups[0]["lr"]})
+        # wandb.log({"learning_rate": optimizer.param_groups[0]["lr"]})
 
-        wandb.log({"train_total_loss": total_loss})
-        wandb.log({"train_classification_loss": classification_loss})
-        wandb.log({"train_box_loss": box_loss})
-        wandb.log({"train_mask_loss": mask_loss})
-        wandb.log({"train_point_loss": point_loss})
+        # wandb.log({"train_total_loss": total_loss})
+        # wandb.log({"train_classification_loss": classification_loss})
+        # wandb.log({"train_box_loss": box_loss})
+        # wandb.log({"train_mask_loss": mask_loss})
+        # wandb.log({"train_point_loss": point_loss})
 
 
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
@@ -210,12 +235,12 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
 
             total_loss, (classification_loss, box_loss, mask_loss, point_loss) = loss(prediction, truth, config)
 
-            wandb.log({"val_total_loss": total_loss})
-            wandb.log({"val_classification_loss": classification_loss})
-            wandb.log({"val_box_loss": box_loss})
-            wandb.log({"val_mask_loss": mask_loss})
-            wandb.log({"val_point_loss": point_loss})
-
+            # wandb.log({"val_total_loss": total_loss})
+            # wandb.log({"val_classification_loss": classification_loss})
+            # wandb.log({"val_box_loss": box_loss})
+            # wandb.log({"val_mask_loss": mask_loss})
+            # wandb.log({"val_point_loss": point_loss})
+        #
         print(f"total loss: {float(total_loss)}")
         print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, point loss: {float(point_loss)}")
 
@@ -229,11 +254,11 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
     print(f"total loss: {float(avg_total_loss)}")
     print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, point loss: {float(avg_point_loss)}")
 
-    wandb.log({"val_avg_total_loss": avg_total_loss})
-    wandb.log({"val_avg_classification_loss": avg_classification_loss})
-    wandb.log({"val_avg_box_loss": avg_box_loss})
-    wandb.log({"val_avg_mask_loss": avg_mask_loss})
-    wandb.log({"val_avg_point_loss": avg_point_loss})
+    # wandb.log({"val_avg_total_loss": avg_total_loss})
+    # wandb.log({"val_avg_classification_loss": avg_classification_loss})
+    # wandb.log({"val_avg_box_loss": avg_box_loss})
+    # wandb.log({"val_avg_mask_loss": avg_mask_loss})
+    # wandb.log({"val_avg_point_loss": avg_point_loss})
 
 
 def main():
@@ -241,25 +266,25 @@ def main():
     for checkpoint in save_dir.iterdir():
         checkpoint.unlink()
 
-    wandb.init(
-        project="yolo_pose",
-        config={
-            **asdict(config),
-            "lr": lr,
-            "momentum": momentum,
-            "weight_decay": weight_decay,
-            "n_epochs": n_epochs,
-            "weight_save_interval": weight_save_interval,
-            "train_split": train_split,
-            "batch_size": batch_size,
-            "hue_jitter": hue_jitter,
-            "saturation_jitter": saturation_jitter,
-            "brightness_jitter": brightness_jitter,
-            "img_mean": img_mean,
-            "img_stddev": img_stddev,
-            "trainval_environments": trainval_environments,
-        },
-    )
+    # wandb.init(
+    #     project="yolo_pose",
+    #     config={
+    #         **asdict(config),
+    #         "lr": lr,
+    #         "momentum": momentum,
+    #         "weight_decay": weight_decay,
+    #         "n_epochs": n_epochs,
+    #         "weight_save_interval": weight_save_interval,
+    #         "train_split": train_split,
+    #         "batch_size": batch_size,
+    #         "hue_jitter": hue_jitter,
+    #         "saturation_jitter": saturation_jitter,
+    #         "brightness_jitter": brightness_jitter,
+    #         "img_mean": img_mean,
+    #         "img_stddev": img_stddev,
+    #         "trainval_environments": trainval_environments,
+    #     },
+    # )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
@@ -267,7 +292,7 @@ def main():
     model = YoloPose(config).to(device)
     initialize_weights(model, [model._backbone])
 
-    wandb.watch(model, log="all", log_freq=1)
+    # wandb.watch(model, log="all", log_freq=1)
 
     def lr_lambda(epoch):
         if epoch < 50:
@@ -275,7 +300,7 @@ def main():
         else:
             return 1
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     trainval_dataset = FallingThingsDataset(
@@ -296,7 +321,7 @@ def main():
         batch_size=batch_size,
         collate_fn=collate_samples,
         shuffle=True,
-        num_workers=4,
+        # num_workers=4,
     )
 
     val_dataloader = DataLoader(
@@ -304,16 +329,16 @@ def main():
         batch_size=batch_size,
         collate_fn=collate_samples,
         shuffle=True,
-        num_workers=4,
+        # num_workers=4,
     )
 
     for epoch_i in range(n_epochs):
         if epoch_i % weight_save_interval == 0:
             save_path = save_dir / f"{epoch_i}.pt"
             torch.save(model.state_dict(), save_path)
-            artifact = wandb.Artifact('model', type='model')
-            artifact.add_dir(save_dir)
-            wandb.log_artifact(artifact)
+            # artifact = wandb.Artifact('model', type='model')
+            # artifact.add_dir(save_dir)
+            # wandb.log_artifact(artifact)
 
         run_train_epoch(epoch_i, model, optimizer, scheduler, train_dataloader, device)
 
@@ -321,9 +346,9 @@ def main():
 
     save_path = save_dir / f"{epoch_i}.pt"
     torch.save(model.state_dict(), save_path)
-    artifact = wandb.Artifact('model', type='model')
-    artifact.add_dir(save_dir)
-    wandb.log_artifact(artifact)
+    # artifact = wandb.Artifact('model', type='model')
+    # artifact.add_dir(save_dir)
+    # wandb.log_artifact(artifact)
 
 
 if __name__ == "__main__":
