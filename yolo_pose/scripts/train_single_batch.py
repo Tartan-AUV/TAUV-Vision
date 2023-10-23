@@ -34,8 +34,8 @@ config = Config(
         (7, 10, 128),
     ],
     pointnet_feature_depth=128,
-    prototype_belief_depth=9,
-    prototype_affinity_depth=32,
+    prototype_belief_depth=64,
+    prototype_affinity_depth=64,
     belief_depth=9,
     affinity_depth=16,
     n_prediction_head_layers=1,
@@ -47,7 +47,7 @@ config = Config(
     negative_example_ratio=3,
 )
 
-sigma=50
+sigma=16
 lr = 1e-4
 momentum = 0.9
 weight_decay = 0

@@ -2,13 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+import matplotlib.pyplot as plt
 
 from yolo_pose.model.boxes import box_decode, iou_matrix, box_to_mask
 from yolo_pose.model.config import Config
 
 
 def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Config) -> (torch.Tensor, (torch.Tensor, ...)):
-    classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototype, affinity_prototype = prediction
+    classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototypes, affinity_prototypes = prediction
     truth_valid, truth_classification, truth_box, truth_seg_map, truth_belief, truth_affinity = truth
 
     device = classification.device
@@ -124,58 +125,68 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
         belief_loss = torch.tensor(0, dtype=torch.float, device=device)
         affinity_loss = torch.tensor(0, dtype=torch.float, device=device)
 
-        for match_i in positive_match[batch_i].nonzero():
-            match_i = int(match_i)
+        for belief_prototype, affinity_prototype in zip(belief_prototypes, affinity_prototypes):
+            for match_i in positive_match[batch_i].nonzero():
+                match_i = int(match_i)
 
-            match_belief = torch.matmul(
-                belief_coeff[batch_i, match_i],
-                belief_prototype[batch_i].reshape(belief_prototype.size(1), -1)
-            ).reshape(belief_coeff.size(2), belief_prototype.size(2), belief_prototype.size(3))
-            match_belief = torch.clamp(F.sigmoid(match_belief), min=1e-4)
-            # max_belief, _ = torch.max(match_belief.reshape(match_belief.size(0), -1), dim=1)
-            # match_belief /= max_belief.unsqueeze(1).unsqueeze(2)
-            match_affinity = torch.matmul(
-                affinity_coeff[batch_i, match_i],
-                affinity_prototype[batch_i].reshape(affinity_prototype.size(1), -1)
-            ).reshape(affinity_coeff.size(2), affinity_prototype.size(2), affinity_prototype.size(3))
-            match_affinity = 2 * (torch.clamp(F.sigmoid(match_affinity), min=1e-4) - 0.5)
+                coeffs = belief_coeff[batch_i, match_i]
+                # coeffs = coeffs / torch.sum(torch.abs(coeffs))
+                match_belief = torch.matmul(
+                    coeffs,
+                    belief_prototype[batch_i].reshape(belief_prototype.size(1), -1)
+                ).reshape(belief_coeff.size(2), belief_prototype.size(2), belief_prototype.size(3))
+                match_belief = torch.clamp(F.sigmoid(match_belief), min=1e-4)
+                # max_belief, _ = torch.max(match_belief.reshape(match_belief.size(0), -1), dim=1)
+                # match_belief /= max_belief.unsqueeze(1).unsqueeze(2)
+                match_affinity = torch.matmul(
+                    affinity_coeff[batch_i, match_i],
+                    affinity_prototype[batch_i].reshape(affinity_prototype.size(1), -1)
+                ).reshape(affinity_coeff.size(2), affinity_prototype.size(2), affinity_prototype.size(3))
+                match_affinity = 2 * (torch.clamp(F.sigmoid(match_affinity), min=1e-4) - 0.5)
 
-            truth_match_belief = truth_belief[batch_i, match_index[batch_i, match_i]]
-            truth_match_affinity = truth_affinity[batch_i, match_index[batch_i, match_i]]
+                truth_match_belief = truth_belief[batch_i, match_index[batch_i, match_i]]
+                truth_match_affinity = truth_affinity[batch_i, match_index[batch_i, match_i]]
 
-            truth_match_belief_resized = F.interpolate(
-                truth_match_belief.unsqueeze(0),
-                match_belief.size()[1:3],
-                mode="bilinear",
-            ).squeeze(0)
+                truth_match_belief_resized = F.interpolate(
+                    truth_match_belief.unsqueeze(0),
+                    match_belief.size()[1:3],
+                    mode="bilinear",
+                ).squeeze(0)
 
-            truth_match_affinity_resized = F.interpolate(
-                truth_match_affinity.unsqueeze(0),
-                match_affinity.size()[1:3],
-                mode="bilinear",
-            ).squeeze(0)
+                truth_match_affinity_resized = F.interpolate(
+                    truth_match_affinity.unsqueeze(0),
+                    match_affinity.size()[1:3],
+                    mode="bilinear",
+                ).squeeze(0)
 
-            belief_loss_map = F.mse_loss(
-                match_belief,
-                truth_match_belief_resized,
-                reduction="none",
-            )
+                belief_loss_map = F.mse_loss(
+                    match_belief,
+                    truth_match_belief_resized,
+                    reduction="none",
+                )
 
-            affinity_loss_map = F.mse_loss(
-                match_affinity,
-                truth_match_affinity_resized,
-                reduction="none",
-            )
+                affinity_loss_map = F.mse_loss(
+                    match_affinity,
+                    truth_match_affinity_resized,
+                    reduction="none",
+                )
 
-            belief_loss += belief_loss_map.mean()
-            affinity_loss += affinity_loss_map.mean()
+                belief_loss += belief_loss_map.mean()
+                belief_loss += -match_belief.mean()
+                affinity_loss += affinity_loss_map.mean()
 
         belief_losses[batch_i] = belief_loss
         affinity_losses[batch_i] = affinity_loss
 
+    plt.figure()
+    plt.imshow(match_belief[0].detach().cpu())
+    plt.colorbar()
+    plt.show()
+
     belief_loss = belief_losses.sum() / positive_match.sum()
     affinity_loss = affinity_losses.sum() / positive_match.sum()
 
-    total_loss = classification_loss + box_loss + mask_loss + 100 * belief_loss + 100 * affinity_loss
+    # total_loss = classification_loss + box_loss + mask_loss + 100 * belief_loss + 100 * affinity_loss
+    total_loss = belief_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss)

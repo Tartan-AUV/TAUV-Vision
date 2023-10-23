@@ -36,7 +36,7 @@ class YoloPose(nn.Module):
         fpn_outputs = self._feature_pyramid(backbone_outputs)
 
         mask_prototype = self._masknet(fpn_outputs[0])
-        belief_prototype, affinity_prototype = self._pointnet(fpn_outputs[0])
+        belief_prototypes, affinity_prototypes = self._pointnet(fpn_outputs[0])
 
         classifications = []
         box_encodings = []
@@ -65,7 +65,7 @@ class YoloPose(nn.Module):
         affinity_coeff = torch.cat(affinity_coeffs, dim=1)
         anchor = torch.cat(anchors, dim=1)
 
-        return classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototype, affinity_prototype
+        return classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototypes, affinity_prototypes
 
 
 def create_belief(size: torch.Tensor, points: torch.Tensor, sigma: float, device: torch.device) -> torch.Tensor:

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from math import pi
+from typing import List
 
 from yolo_pose.model.config import Config
 
@@ -37,16 +38,24 @@ class Pointnet(nn.Module):
         self._belief_stages = nn.ModuleList(belief_stages)
         self._affinity_stages = nn.ModuleList(affinity_stages)
 
-    def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, torch.Tensor):
+    def forward(self, fpn_output: torch.Tensor) -> (List[torch.Tensor], List[torch.Tensor]):
+        beliefs = []
+        affinities = []
 
         belief = self._belief_stages[0].forward(fpn_output)
         affinity = self._affinity_stages[0].forward(fpn_output)
+
+        beliefs.append(belief)
+        affinities.append(affinity)
 
         for (belief_stage, affinity_stage) in zip(self._belief_stages[1:], self._affinity_stages[1:]):
             belief = belief_stage.forward(torch.cat((belief, affinity, fpn_output), dim=1))
             affinity = affinity_stage.forward(torch.cat((belief, affinity, fpn_output), dim=1))
 
-        return belief, affinity
+            beliefs.append(belief)
+            affinities.append(affinity)
+
+        return beliefs, affinities
 
     def _create_stage(self, in_depth, out_depth, layer_config) -> nn.Module:
         kernel_size, layer_count, final_depth = layer_config
