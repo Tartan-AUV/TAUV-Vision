@@ -40,6 +40,7 @@ config = Config(
     affinity_depth=16,
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
+    belief_sigma=16,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
     iou_pos_threshold=0.5,
@@ -47,7 +48,6 @@ config = Config(
     negative_example_ratio=3,
 )
 
-sigma=16
 lr = 1e-4
 momentum = 0.9
 weight_decay = 0
@@ -56,9 +56,12 @@ weight_save_interval = 10
 train_split = 0.9
 batch_size = 4
 
-hue_jitter = 0.2
-saturation_jitter = 0.2
-brightness_jitter = 0.2
+# hue_jitter = 0.2
+# saturation_jitter = 0.2
+# brightness_jitter = 0.2
+hue_jitter = 0
+saturation_jitter = 0
+brightness_jitter = 0
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
@@ -173,8 +176,8 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         for batch_i in range(points.size(0)):
             for match_i in range(points.size(1)):
                 center = bounding_boxes[batch_i, match_i][0:2] * size
-                belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], sigma, device=device)
-                belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), sigma, device=device)
+                belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma, device=device)
+                belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma, device=device)
 
         affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
         for batch_i in range(points.size(0)):
@@ -295,10 +298,11 @@ def main():
     # wandb.watch(model, log="all", log_freq=1)
 
     def lr_lambda(epoch):
-        if epoch < 50:
-            return (epoch + 1) / 50
-        else:
-            return 1
+        return 1
+        # if epoch < 50:
+        #     return (epoch + 1) / 50
+        # else:
+        #     return 1
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -311,8 +315,8 @@ def main():
         transform_sample
     )
 
-    # train_size = int(train_split * len(trainval_dataset))
-    train_size = batch_size
+    train_size = int(train_split * len(trainval_dataset))
+    # train_size = batch_size
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 
@@ -320,7 +324,7 @@ def main():
         train_dataset,
         batch_size=batch_size,
         collate_fn=collate_samples,
-        shuffle=True,
+        # shuffle=True,
         # num_workers=4,
     )
 
@@ -328,7 +332,7 @@ def main():
         val_dataset,
         batch_size=batch_size,
         collate_fn=collate_samples,
-        shuffle=True,
+        # shuffle=True,
         # num_workers=4,
     )
 

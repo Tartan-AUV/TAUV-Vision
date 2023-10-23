@@ -96,6 +96,5 @@ class Pointnet(nn.Module):
             kernel_size=1,
             stride=1
         ))
-        layers.append(nn.LeakyReLU())
 
         return nn.Sequential(*layers)

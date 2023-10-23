@@ -23,6 +23,8 @@ class Config:
     n_prediction_head_layers: int
     n_fpn_downsample_layers: int
 
+    belief_sigma: float
+
     anchor_scales: (int, ...)
     anchor_aspect_ratios: (int, ...)
 
