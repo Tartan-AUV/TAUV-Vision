@@ -174,18 +174,23 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
         belief_losses[batch_i] = belief_loss
         affinity_losses[batch_i] = affinity_loss
 
-    fig, axs = plt.subplots(4)
-    axs[0].imshow(truth_match_belief_resized[0].detach().cpu())
-    im = axs[1].imshow(match_belief[0].detach().cpu())
-    axs[2].imshow(belief_loss_map[0].detach().cpu())
-    axs[3].imshow(coeffs.detach().cpu())
-    fig.colorbar(im)
-    plt.show()
+    # fig, axs = plt.subplots(4)
+    # axs[0].imshow(truth_match_belief_resized[0].detach().cpu())
+    # im = axs[1].imshow(match_belief[0].detach().cpu())
+    # axs[2].imshow(belief_loss_map[0].detach().cpu())
+    # axs[3].imshow(coeffs.detach().cpu())
+    # fig.colorbar(im)
+    #
+    # fig, axs = plt.subplots(3)
+    # axs[0].imshow(truth_match_affinity_resized[0].detach().cpu())
+    # im = axs[1].imshow(match_affinity[0].detach().cpu())
+    # axs[2].imshow(affinity_loss_map[0].detach().cpu())
+    # fig.colorbar(im)
+    # plt.show()
 
     belief_loss = belief_losses.sum() / positive_match.sum()
     affinity_loss = affinity_losses.sum() / positive_match.sum()
 
-    # total_loss = classification_loss + box_loss + mask_loss + 100 * belief_loss + 100 * affinity_loss
-    total_loss = belief_loss
+    total_loss = classification_loss + box_loss + mask_loss + belief_loss + affinity_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss)

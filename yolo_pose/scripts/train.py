@@ -10,7 +10,7 @@ import wandb
 
 from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
-from yolo_pose.model.model import YoloPose
+from yolo_pose.model.model import YoloPose, create_belief, create_affinity
 from yolo_pose.model.weights import initialize_weights
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
 
@@ -23,13 +23,25 @@ config = Config(
     feature_depth=256,
     n_classes=23,
     n_prototype_masks=32,
-    n_prototype_position_maps=32,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
-    n_pointnet_layers_pre_upsample=1,
-    n_pointnet_layers_post_upsample=1,
+    pointnet_layers=[
+        (3, 6, 512),
+        (7, 10, 128),
+        (7, 10, 128),
+        (7, 10, 128),
+        (7, 10, 128),
+        (7, 10, 128),
+    ],
+    pointnet_feature_depth=128,
+    prototype_belief_depth=64,
+    prototype_affinity_depth=64,
+    belief_depth=9,
+    affinity_depth=16,
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
+    belief_sigma=16,
+    affinity_radius=32,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
     iou_pos_threshold=0.5,
@@ -37,13 +49,13 @@ config = Config(
     negative_example_ratio=3,
 )
 
-lr = 1e-3
+lr = 1e-4
 momentum = 0.9
 weight_decay = 0
 n_epochs = 500
 weight_save_interval = 10
 train_split = 0.9
-batch_size = 12
+batch_size = 4
 
 hue_jitter = 0.2
 saturation_jitter = 0.2
@@ -100,7 +112,6 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
     img = torch.stack([sample.img for sample in samples], dim=0)
     seg_map = torch.stack([sample.seg_map for sample in samples], dim=0)
     depth_map = torch.stack([sample.depth_map for sample in samples], dim=0)
-    position_map = torch.stack([sample.position_map for sample in samples], dim=0)
 
     sample = FallingThingsSample(
         intrinsics=intrinsics,
@@ -114,7 +125,6 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
         img=img,
         seg_map=seg_map,
         depth_map=depth_map,
-        position_map=position_map,
     )
 
     return sample
@@ -129,7 +139,6 @@ def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
     img = color_transforms(sample.img)
     seg_map = sample.seg_map
     depth_map = sample.depth_map
-    position_map = sample.position_map
 
     transformed_sample = FallingThingsSample(
         intrinsics=sample.intrinsics,
@@ -143,7 +152,6 @@ def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
         img=img,
         seg_map=seg_map,
         depth_map=depth_map,
-        position_map=position_map,
     )
 
     return transformed_sample
@@ -158,20 +166,38 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         optimizer.zero_grad()
 
         img = batch.img.to(device)
+        size = torch.tensor([img.size(2), img.size(3)], device=device)
+        points = batch.projected_cuboids.to(device)
+        bounding_boxes = batch.bounding_boxes.to(device)
+
+        belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
+        for batch_i in range(points.size(0)):
+            for match_i in range(points.size(1)):
+                center = bounding_boxes[batch_i, match_i][0:2] * size
+                belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma, device=device)
+                belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma, device=device)
+
+        affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
+        for batch_i in range(points.size(0)):
+            for match_i in range(points.size(1)):
+                center = bounding_boxes[batch_i, match_i][0:2] * size
+                affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center, config.affinity_radius, device=device)
+
         truth = (
             batch.valid.to(device),
             batch.classifications.to(device),
             batch.bounding_boxes.to(device),
             batch.seg_map.to(device),
-            batch.position_map.to(device),
+            belief,
+            affinity,
         )
 
         prediction = model(img)
 
-        total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
+        total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss) = loss(prediction, truth, config)
 
         print(f"total loss: {float(total_loss)}")
-        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, belief loss: {float(belief_loss)}, affinity loss: {float(affinity_loss)}")
 
         total_loss.backward()
 
@@ -184,13 +210,14 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         wandb.log({"train_classification_loss": classification_loss})
         wandb.log({"train_box_loss": box_loss})
         wandb.log({"train_mask_loss": mask_loss})
-        wandb.log({"train_position_map_loss": position_map_loss})
+        wandb.log({"train_belief_loss": belief_loss})
+        wandb.log({"train_affinity_loss": affinity_loss})
 
 
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
     model.eval()
 
-    avg_losses = torch.zeros(5, dtype=torch.float)
+    avg_losses = torch.zeros(6, dtype=torch.float)
     n_batch = torch.zeros(1, dtype=torch.float)
 
     for batch_i, batch in enumerate(data_loader):
@@ -198,42 +225,67 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
 
         with torch.no_grad():
             img = batch.img.to(device)
+            size = torch.tensor([img.size(2), img.size(3)], device=device)
+            points = batch.projected_cuboids.to(device)
+            bounding_boxes = batch.bounding_boxes.to(device)
+
+            belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
+            for batch_i in range(points.size(0)):
+                for match_i in range(points.size(1)):
+                    center = bounding_boxes[batch_i, match_i][0:2] * size
+                    belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma,
+                                                                 device=device)
+                    belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma,
+                                                                device=device)
+
+            affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
+            for batch_i in range(points.size(0)):
+                for match_i in range(points.size(1)):
+                    center = bounding_boxes[batch_i, match_i][0:2] * size
+                    affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center,
+                                                                 config.affinity_radius, device=device)
+
             truth = (
                 batch.valid.to(device),
                 batch.classifications.to(device),
                 batch.bounding_boxes.to(device),
                 batch.seg_map.to(device),
-                batch.position_map.to(device),
+                belief,
+                affinity,
             )
 
             prediction = model.forward(img)
 
-            total_loss, (classification_loss, box_loss, mask_loss, position_map_loss) = loss(prediction, truth, config)
+            # TODO: Log some stuff about the prediction
+
+            total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss) = loss(prediction, truth, config)
 
             wandb.log({"val_total_loss": total_loss})
             wandb.log({"val_classification_loss": classification_loss})
             wandb.log({"val_box_loss": box_loss})
             wandb.log({"val_mask_loss": mask_loss})
-            wandb.log({"val_position_map_loss": position_map_loss})
+            wandb.log({"val_belief_loss": belief_loss})
+            wandb.log({"val_affinity_loss": affinity_loss})
 
         print(f"total loss: {float(total_loss)}")
-        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, position map loss: {float(position_map_loss)}")
+        print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, belief loss: {float(belief_loss)}, affinity loss: {float(affinity_loss)}")
 
-        avg_losses += torch.Tensor((total_loss, classification_loss, box_loss, mask_loss, position_map_loss))
+        avg_losses += torch.Tensor((total_loss, classification_loss, box_loss, mask_loss, belief_loss, affinity_loss))
         n_batch += 1
 
     avg_losses /= n_batch
-    avg_total_loss, avg_classification_loss, avg_box_loss, avg_mask_loss, avg_position_map_loss = avg_losses
+    avg_total_loss, avg_classification_loss, avg_box_loss, avg_mask_loss, avg_belief_loss, avg_affinity_loss = avg_losses
 
     print("validation averages:")
     print(f"total loss: {float(avg_total_loss)}")
-    print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, position map loss: {float(avg_position_map_loss)}")
+    print(f"classification loss: {float(avg_classification_loss)}, box loss: {float(avg_box_loss)}, mask loss: {float(avg_mask_loss)}, belief loss: {float(avg_belief_loss)}, affinity loss: {float(avg_affinity_loss)}")
 
     wandb.log({"val_avg_total_loss": avg_total_loss})
     wandb.log({"val_avg_classification_loss": avg_classification_loss})
     wandb.log({"val_avg_box_loss": avg_box_loss})
     wandb.log({"val_avg_mask_loss": avg_mask_loss})
-    wandb.log({"val_avg_position_map_loss": avg_position_map_loss})
+    wandb.log({"val_avg_belief_loss": avg_belief_loss})
+    wandb.log({"val_avg_affinity_loss": avg_affinity_loss})
 
 
 def main():
@@ -262,7 +314,6 @@ def main():
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
 
     model = YoloPose(config).to(device)
     initialize_weights(model, [model._backbone])
@@ -270,12 +321,12 @@ def main():
     wandb.watch(model, log="all", log_freq=1)
 
     def lr_lambda(epoch):
-        if epoch < 50:
-            return (epoch + 1) / 50
+        if epoch < 10:
+            return (epoch + 1) / 10
         else:
             return 1
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     trainval_dataset = FallingThingsDataset(
@@ -287,7 +338,6 @@ def main():
     )
 
     train_size = int(train_split * len(trainval_dataset))
-    # train_size = 12
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 
@@ -303,7 +353,7 @@ def main():
         val_dataset,
         batch_size=batch_size,
         collate_fn=collate_samples,
-        shuffle=True,
+        shuffle=False,
         num_workers=4,
     )
 

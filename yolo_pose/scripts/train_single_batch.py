@@ -41,6 +41,7 @@ config = Config(
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
     belief_sigma=16,
+    affinity_radius=32,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
     iou_pos_threshold=0.5,
@@ -56,12 +57,9 @@ weight_save_interval = 10
 train_split = 0.9
 batch_size = 4
 
-# hue_jitter = 0.2
-# saturation_jitter = 0.2
-# brightness_jitter = 0.2
-hue_jitter = 0
-saturation_jitter = 0
-brightness_jitter = 0
+hue_jitter = 0.2
+saturation_jitter = 0.2
+brightness_jitter = 0.2
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
@@ -183,7 +181,7 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         for batch_i in range(points.size(0)):
             for match_i in range(points.size(1)):
                 center = bounding_boxes[batch_i, match_i][0:2] * size
-                affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center, device=device)
+                affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center, config.affinity_radius, device=device)
 
         truth = (
             batch.valid.to(device),

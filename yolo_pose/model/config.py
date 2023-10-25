@@ -24,6 +24,7 @@ class Config:
     n_fpn_downsample_layers: int
 
     belief_sigma: float
+    affinity_radius: float
 
     anchor_scales: (int, ...)
     anchor_aspect_ratios: (int, ...)
