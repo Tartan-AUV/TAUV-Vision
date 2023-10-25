@@ -3,16 +3,18 @@ import os
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-from typing import List
+from typing import List, Tuple
 from pathlib import Path
 from dataclasses import asdict
 import wandb
+import matplotlib.pyplot as plt
 
 from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose, create_belief, create_affinity
 from yolo_pose.model.weights import initialize_weights
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
+from yolo_pose.scripts.utils.plot import plot_prototype
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -157,40 +159,48 @@ def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
     return transformed_sample
 
 
+def prepare_batch(batch: FallingThingsSample, device: torch.device) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
+    img = batch.img.to(device)
+    size = torch.tensor([img.size(2), img.size(3)], device=device)
+    points = batch.projected_cuboids.to(device)
+    bounding_boxes = batch.bounding_boxes.to(device)
+
+    belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
+    for batch_i in range(points.size(0)):
+        for match_i in range(points.size(1)):
+            center = bounding_boxes[batch_i, match_i][0:2] * size
+            belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma,
+                                                         device=device)
+            belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma,
+                                                        device=device)
+
+    affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
+    for batch_i in range(points.size(0)):
+        for match_i in range(points.size(1)):
+            center = bounding_boxes[batch_i, match_i][0:2] * size
+            affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center,
+                                                         config.affinity_radius, device=device)
+
+    truth = (
+        batch.valid.to(device),
+        batch.classifications.to(device),
+        batch.bounding_boxes.to(device),
+        batch.seg_map.to(device),
+        belief,
+        affinity,
+    )
+
+    return img, truth
+
+
 def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, data_loader: DataLoader, device: torch.device):
     model.train()
 
     for batch_i, batch in enumerate(data_loader):
         print(f"train epoch {epoch_i}, batch {batch_i}")
+        img, truth = prepare_batch(batch, device=device)
 
         optimizer.zero_grad()
-
-        img = batch.img.to(device)
-        size = torch.tensor([img.size(2), img.size(3)], device=device)
-        points = batch.projected_cuboids.to(device)
-        bounding_boxes = batch.bounding_boxes.to(device)
-
-        belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
-        for batch_i in range(points.size(0)):
-            for match_i in range(points.size(1)):
-                center = bounding_boxes[batch_i, match_i][0:2] * size
-                belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma, device=device)
-                belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma, device=device)
-
-        affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
-        for batch_i in range(points.size(0)):
-            for match_i in range(points.size(1)):
-                center = bounding_boxes[batch_i, match_i][0:2] * size
-                affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center, config.affinity_radius, device=device)
-
-        truth = (
-            batch.valid.to(device),
-            batch.classifications.to(device),
-            batch.bounding_boxes.to(device),
-            batch.seg_map.to(device),
-            belief,
-            affinity,
-        )
 
         prediction = model(img)
 
@@ -214,6 +224,26 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         wandb.log({"train_affinity_loss": affinity_loss})
 
 
+def plot_validation_batch(batch_i: int, img: torch.Tensor, prediction: Tuple[torch.Tensor, ...], truth: Tuple[torch.Tensor, ...]):
+    classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototypes, affinity_prototypes = prediction
+
+    n_batch = img.size(0)
+
+    for i in range(n_batch):
+        sample_i = batch_i + i
+        mask_prototype_fig = plot_prototype(mask_prototype[i])
+        wandb.log({f"validation_{sample_i}_mask_prototype:": mask_prototype_fig})
+        plt.close(mask_prototype_fig)
+
+        belief_prototype_fig = plot_prototype(belief_prototypes[-1][i])
+        wandb.log({f"validation_{sample_i}_belief_prototype": belief_prototype_fig})
+        plt.close(belief_prototype_fig)
+
+        affinity_prototype_fig = plot_prototype(affinity_prototypes[-1][i])
+        wandb.log({f"validation_{sample_i}_affinity_prototype": affinity_prototype_fig})
+        plt.close(affinity_prototype_fig)
+
+
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
     model.eval()
 
@@ -224,39 +254,12 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
         print(f"val epoch {epoch_i}, batch {batch_i}")
 
         with torch.no_grad():
-            img = batch.img.to(device)
-            size = torch.tensor([img.size(2), img.size(3)], device=device)
-            points = batch.projected_cuboids.to(device)
-            bounding_boxes = batch.bounding_boxes.to(device)
-
-            belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
-            for batch_i in range(points.size(0)):
-                for match_i in range(points.size(1)):
-                    center = bounding_boxes[batch_i, match_i][0:2] * size
-                    belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma,
-                                                                 device=device)
-                    belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma,
-                                                                device=device)
-
-            affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
-            for batch_i in range(points.size(0)):
-                for match_i in range(points.size(1)):
-                    center = bounding_boxes[batch_i, match_i][0:2] * size
-                    affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center,
-                                                                 config.affinity_radius, device=device)
-
-            truth = (
-                batch.valid.to(device),
-                batch.classifications.to(device),
-                batch.bounding_boxes.to(device),
-                batch.seg_map.to(device),
-                belief,
-                affinity,
-            )
+            img, truth = prepare_batch(batch, device=device)
 
             prediction = model.forward(img)
 
-            # TODO: Log some stuff about the prediction
+            if batch_i == 0:
+                plot_validation_batch(batch_i, img, prediction, truth)
 
             total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss) = loss(prediction, truth, config)
 
@@ -337,7 +340,8 @@ def main():
         transform_sample
     )
 
-    train_size = int(train_split * len(trainval_dataset))
+    # train_size = int(train_split * len(trainval_dataset))
+    train_size = 16
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 
