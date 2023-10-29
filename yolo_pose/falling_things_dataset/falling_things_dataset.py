@@ -211,7 +211,7 @@ class FallingThingsDataset(Dataset):
         projected_cuboids = [
             object["projected_cuboid"] for object in left_data["objects"]
         ]
-        projected_cuboids = torch.Tensor(projected_cuboids)
+        projected_cuboids = torch.Tensor(projected_cuboids).flip(-1)
 
         camera_pose = left_data["camera_data"]["location_worldframe"] + left_data["camera_data"]["quaternion_xyzw_worldframe"]
         camera_pose = torch.Tensor(camera_pose)

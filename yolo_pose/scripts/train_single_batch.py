@@ -1,18 +1,23 @@
+import pathlib
+
 import torch
 import os
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-from typing import List
+from typing import List, Tuple, Optional
 from pathlib import Path
 from dataclasses import asdict
 import wandb
+import matplotlib.pyplot as plt
+import pathlib
 
 from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose, create_belief, create_affinity
 from yolo_pose.model.weights import initialize_weights
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
+from yolo_pose.scripts.utils.plot import plot_prototype, plot_belief, save_plot
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -34,14 +39,14 @@ config = Config(
         (7, 10, 128),
     ],
     pointnet_feature_depth=128,
-    prototype_belief_depth=64,
+    prototype_belief_depth=9,
     prototype_affinity_depth=64,
     belief_depth=9,
     affinity_depth=16,
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
-    belief_sigma=16,
-    affinity_radius=32,
+    belief_sigma=4,
+    affinity_radius=16,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
     iou_pos_threshold=0.5,
@@ -156,6 +161,76 @@ def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
 
     return transformed_sample
 
+def prepare_batch(batch: FallingThingsSample, device: torch.device) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
+    img = batch.img.to(device)
+    size = torch.tensor([img.size(2), img.size(3)], device=device)
+    points = batch.projected_cuboids.to(device)
+    bounding_boxes = batch.bounding_boxes.to(device)
+
+    belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
+    for batch_i in range(points.size(0)):
+        for match_i in range(points.size(1)):
+            center = bounding_boxes[batch_i, match_i][0:2] * size
+            belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma,
+                                                         device=device)
+            belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma,
+                                                        device=device)
+
+    affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
+    for batch_i in range(points.size(0)):
+        for match_i in range(points.size(1)):
+            center = bounding_boxes[batch_i, match_i][0:2] * size
+            affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center,
+                                                         config.affinity_radius, device=device)
+
+    truth = (
+        batch.valid.to(device),
+        batch.classifications.to(device),
+        batch.bounding_boxes.to(device),
+        batch.seg_map.to(device),
+        belief,
+        affinity,
+    )
+
+    return img, truth
+
+
+def plot_train_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: Tuple[torch.Tensor, ...], n_plot=1, n_detections=10, save_dir: Optional[pathlib.Path] = None):
+    classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototypes, affinity_prototypes = prediction
+
+    batch_size = img.size(0)
+
+    for sample_i in range(min(batch_size, n_plot)):
+        for stage_i in range(len(belief_prototypes)):
+            belief_prototype_fig = plot_prototype(belief_prototypes[stage_i][sample_i])
+            belief_prototype_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Belief Prototype - Stage {stage_i}")
+
+            save_plot(belief_prototype_fig, save_dir, f"train_{epoch_i}_{sample_i}_belief_prototype_{stage_i}")
+            plt.close(belief_prototype_fig)
+
+        detections = torch.argmax(classification[sample_i], dim=-1).nonzero().squeeze(-1)
+
+        if len(detections) < n_detections:
+            for detection_i in detections:
+                belief = torch.matmul(
+                    belief_coeff[sample_i, detection_i],
+                    belief_prototypes[-1][sample_i].reshape(belief_prototypes[-1].size(1), -1)
+                ).reshape(belief_coeff.size(2), belief_prototypes[-1].size(2), belief_prototypes[-1].size(3))
+                belief = torch.clamp(F.sigmoid(belief), min=1e-4, max=1-1e-4)
+
+                belief_fig = plot_belief(belief)
+                belief_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Detection {detection_i} Belief")
+
+                save_plot(belief_fig, save_dir, f"train_{epoch_i}_{sample_i}_belief_{detection_i}")
+                plt.close(belief_fig)
+
+                belief_overlay_fig = plot_belief(belief, img[sample_i])
+                belief_overlay_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Detection {detection_i} Belief")
+
+                save_plot(belief_overlay_fig, save_dir, f"train_{epoch_i}_{sample_i}_belief_overlay_{detection_i}")
+                plt.close(belief_overlay_fig)
+
+
 
 def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, data_loader: DataLoader, device: torch.device):
     model.train()
@@ -163,38 +238,16 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
     for batch_i, batch in enumerate(data_loader):
         print(f"train epoch {epoch_i}, batch {batch_i}")
 
+        img, truth = prepare_batch(batch, device=device)
+
         optimizer.zero_grad()
-
-        img = batch.img.to(device)
-        size = torch.tensor([img.size(2), img.size(3)], device=device)
-        points = batch.projected_cuboids.to(device)
-        bounding_boxes = batch.bounding_boxes.to(device)
-
-        belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
-        for batch_i in range(points.size(0)):
-            for match_i in range(points.size(1)):
-                center = bounding_boxes[batch_i, match_i][0:2] * size
-                belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma, device=device)
-                belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma, device=device)
-
-        affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
-        for batch_i in range(points.size(0)):
-            for match_i in range(points.size(1)):
-                center = bounding_boxes[batch_i, match_i][0:2] * size
-                affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center, config.affinity_radius, device=device)
-
-        truth = (
-            batch.valid.to(device),
-            batch.classifications.to(device),
-            batch.bounding_boxes.to(device),
-            batch.seg_map.to(device),
-            belief,
-            affinity,
-        )
 
         prediction = model(img)
 
         total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss) = loss(prediction, truth, config)
+
+        if batch_i == 0:
+            plot_train_batch(epoch_i, batch_i, img, prediction, n_plot=1, save_dir=pathlib.Path("./out"))
 
         print(f"total loss: {float(total_loss)}")
         print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}, belief loss: {float(belief_loss)}, affinity loss: {float(affinity_loss)}")
@@ -296,11 +349,11 @@ def main():
     # wandb.watch(model, log="all", log_freq=1)
 
     def lr_lambda(epoch):
-        return 1
-        # if epoch < 50:
-        #     return (epoch + 1) / 50
-        # else:
-        #     return 1
+        # return 1
+        if epoch < 50:
+            return (epoch + 1) / 50
+        else:
+            return 1
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -313,8 +366,8 @@ def main():
         transform_sample
     )
 
-    train_size = int(train_split * len(trainval_dataset))
-    # train_size = batch_size
+    # train_size = int(train_split * len(trainval_dataset))
+    train_size = batch_size
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 

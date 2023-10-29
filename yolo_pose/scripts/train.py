@@ -3,8 +3,9 @@ import os
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from pathlib import Path
+import pathlib
 from dataclasses import asdict
 import wandb
 import matplotlib.pyplot as plt
@@ -14,7 +15,7 @@ from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose, create_belief, create_affinity
 from yolo_pose.model.weights import initialize_weights
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
-from yolo_pose.scripts.utils.plot import plot_prototype
+from yolo_pose.scripts.utils.plot import plot_prototype, plot_belief, save_plot
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -42,8 +43,8 @@ config = Config(
     affinity_depth=16,
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
-    belief_sigma=16,
-    affinity_radius=32,
+    belief_sigma=4,
+    affinity_radius=4,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
     iou_pos_threshold=0.5,
@@ -224,24 +225,35 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         wandb.log({"train_affinity_loss": affinity_loss})
 
 
-def plot_validation_batch(batch_i: int, img: torch.Tensor, prediction: Tuple[torch.Tensor, ...], truth: Tuple[torch.Tensor, ...]):
+def plot_validation_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: Tuple[torch.Tensor, ...], truth: Tuple[torch.Tensor, ...], save_dir: Optional[pathlib.Path] = None):
     classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototypes, affinity_prototypes = prediction
 
     n_batch = img.size(0)
 
     for i in range(n_batch):
-        sample_i = batch_i + i
-        mask_prototype_fig = plot_prototype(mask_prototype[i])
-        wandb.log({f"validation_{sample_i}_mask_prototype:": mask_prototype_fig})
-        plt.close(mask_prototype_fig)
+        detections = torch.argmax(classification[i], dim=-1).nonzero().squeeze(-1)
 
-        belief_prototype_fig = plot_prototype(belief_prototypes[-1][i])
-        wandb.log({f"validation_{sample_i}_belief_prototype": belief_prototype_fig})
-        plt.close(belief_prototype_fig)
+        if len(detections) < 10:
+            for detection_i in detections:
+                belief = torch.matmul(
+                    belief_coeff[i, detection_i],
+                    belief_prototypes[-1][i].reshape(belief_prototypes[-1].size(1), -1)
+                ).reshape(belief_coeff.size(2), belief_prototypes[-1].size(2), belief_prototypes[-1].size(3))
+                belief = torch.clamp(F.sigmoid(belief), min=1e-4, max=1-1e-4)
 
-        affinity_prototype_fig = plot_prototype(affinity_prototypes[-1][i])
-        wandb.log({f"validation_{sample_i}_affinity_prototype": affinity_prototype_fig})
-        plt.close(affinity_prototype_fig)
+                belief_fig = plot_belief(belief)
+                belief_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {i} Detection {detection_i} Belief")
+
+                save_plot(belief_fig, save_dir, f"train_{epoch_i}_{i}_belief_{detection_i}")
+                wandb.log({f"train_{epoch_i}_{i}_belief_{detection_i}": belief_fig})
+                plt.close(belief_fig)
+
+                belief_overlay_fig = plot_belief(belief, img[i])
+                belief_overlay_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {i} Detection {detection_i} Belief")
+
+                save_plot(belief_overlay_fig, save_dir, f"train_{epoch_i}_{i}_belief_overlay_{detection_i}")
+                wandb.log({f"train_{epoch_i}_{i}_belief_overlay_{detection_i}": belief_overlay_fig})
+                plt.close(belief_overlay_fig)
 
 
 def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
@@ -259,7 +271,7 @@ def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader,
             prediction = model.forward(img)
 
             if batch_i == 0:
-                plot_validation_batch(batch_i, img, prediction, truth)
+                plot_validation_batch(epoch_i, batch_i, img, prediction, truth, save_dir=pathlib.Path("./out"))
 
             total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss) = loss(prediction, truth, config)
 
@@ -340,8 +352,7 @@ def main():
         transform_sample
     )
 
-    # train_size = int(train_split * len(trainval_dataset))
-    train_size = 16
+    train_size = int(train_split * len(trainval_dataset))
     val_size = len(trainval_dataset) - train_size
     train_dataset, val_dataset = random_split(trainval_dataset, [train_size, val_size])
 

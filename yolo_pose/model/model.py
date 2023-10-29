@@ -36,7 +36,7 @@ class YoloPose(nn.Module):
         fpn_outputs = self._feature_pyramid(backbone_outputs)
 
         mask_prototype = self._masknet(fpn_outputs[0])
-        belief_prototypes, affinity_prototypes = self._pointnet(fpn_outputs[0])
+        belief_prototypes, affinity_prototypes = self._pointnet(backbone_outputs[1])
 
         classifications = []
         box_encodings = []
@@ -92,13 +92,13 @@ def create_affinity(size: torch.Tensor, points: torch.Tensor, center: torch.Tens
     yy, xx = torch.meshgrid(y, x)
     grid = torch.stack((yy, xx), dim=0)
 
-    center_delta = center.unsqueeze(1).unsqueeze(2) - grid
-    center_dist = torch.sqrt(center_delta[0] ** 2 + center_delta[1] ** 2)
-
     for point_i in range(points.size(0)):
+        point_delta = points[point_i].unsqueeze(1).unsqueeze(2) - grid
+        point_dist = torch.sqrt(point_delta[0] ** 2 + point_delta[1] ** 2)
+
         affinity[2 * point_i:2 * point_i + 2] = \
             affinity[2 * point_i:2 * point_i + 2] + \
-            (center_dist <= radius) * (center - points[point_i]).unsqueeze(1).unsqueeze(2)
+            (point_dist <= radius) * (center - points[point_i]).unsqueeze(1).unsqueeze(2)
         affinity[2 * point_i:2 * point_i + 2] /= torch.where(
             affinity[2 * point_i:2 * point_i + 2] != 0,
             torch.sqrt(affinity[2 * point_i] ** 2 + affinity[2 * point_i + 1] ** 2),

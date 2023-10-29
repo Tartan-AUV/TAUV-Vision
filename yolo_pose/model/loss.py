@@ -53,8 +53,6 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
         selected_match[selected_negative_match_index] = True
         selected_match = selected_match.detach()
 
-        print(selected_match.nonzero())
-
         classification_loss = (selected_match.float() * classification_cross_entropy).sum()
 
         classification_losses[batch_i] = classification_loss
@@ -160,6 +158,7 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
                 ).squeeze(0)
 
                 beta = 1 - truth_match_belief_resized.mean()
+                # beta = 0.5
                 belief_loss_map = -beta * truth_match_belief_resized * torch.log(match_belief) - (1 - beta) * (1 - truth_match_belief_resized) * torch.log(1 - match_belief)
 
                 affinity_loss_map = F.mse_loss(
@@ -180,7 +179,7 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
     # axs[2].imshow(belief_loss_map[0].detach().cpu())
     # axs[3].imshow(coeffs.detach().cpu())
     # fig.colorbar(im)
-    #
+
     # fig, axs = plt.subplots(3)
     # axs[0].imshow(truth_match_affinity_resized[0].detach().cpu())
     # im = axs[1].imshow(match_affinity[0].detach().cpu())
@@ -192,5 +191,7 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
     affinity_loss = affinity_losses.sum() / positive_match.sum()
 
     total_loss = classification_loss + box_loss + mask_loss + belief_loss + affinity_loss
+    # total_loss = belief_loss
+    # total_loss = 100 * belief_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss, belief_loss, affinity_loss)

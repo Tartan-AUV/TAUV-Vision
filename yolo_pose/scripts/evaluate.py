@@ -15,13 +15,21 @@ config = Config(
     feature_depth=256,
     n_classes=23,
     n_prototype_masks=32,
-    n_prototype_position_maps=32,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
-    n_pointnet_layers_pre_upsample=1,
-    n_pointnet_layers_post_upsample=1,
+    pointnet_layers=[
+        (3, 6, 512),
+        (7, 10, 128),
+    ],
+    pointnet_feature_depth=128,
+    prototype_belief_depth=64,
+    prototype_affinity_depth=64,
+    belief_depth=9,
+    affinity_depth=16,
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
+    belief_sigma=4,
+    affinity_radius=4,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
     iou_pos_threshold=0.5,
@@ -77,7 +85,6 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
     img = torch.stack([sample.img for sample in samples], dim=0)
     seg_map = torch.stack([sample.seg_map for sample in samples], dim=0)
     depth_map = torch.stack([sample.depth_map for sample in samples], dim=0)
-    position_map = torch.stack([sample.position_map for sample in samples], dim=0)
 
     sample = FallingThingsSample(
         intrinsics=intrinsics,
@@ -91,7 +98,6 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
         img=img,
         seg_map=seg_map,
         depth_map=depth_map,
-        position_map=position_map,
     )
 
     return sample
@@ -99,7 +105,7 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
 
 def main():
     model = YoloPose(config)
-    model.load_state_dict(torch.load(Path(weights_root).expanduser() / "90.pt", map_location=torch.device("cpu")))
+    model.load_state_dict(torch.load(Path(weights_root).expanduser() / "30.pt", map_location=torch.device("cpu")))
 
     test_dataset = FallingThingsDataset(
         falling_things_root,
@@ -120,7 +126,7 @@ def main():
 
     for batch in test_dataloader:
         prediction = model(batch.img)
-        classification, box_encoding, mask_coeff, position_map_coeff, anchor, mask_prototype, position_map_prototype = prediction
+        classification, box_encoding, mask_coeff, belief_coeff, affinity_coeff, anchor, mask_prototype, belief_prototype, affinity_prototype = prediction
 
         pass
 
