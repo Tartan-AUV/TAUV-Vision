@@ -6,13 +6,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pathlib
 
-from yolo_pose.model.config import Config
-from yolo_pose.model.loss import loss
-from yolo_pose.model.model import YoloPose, create_belief, create_affinity
-from yolo_pose.model.weights import initialize_weights
-from yolo_pose.model.boxes import box_to_corners, corners_to_box
+from yolact.model.config import Config
+from yolact.model.loss import loss
+from yolact.model.model import Yolact, create_belief, create_affinity
+from yolact.model.weights import initialize_weights
+from yolact.model.boxes import box_to_corners, corners_to_box
 from datasets.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
-from yolo_pose.scripts.utils.plot import plot_prototype, plot_belief, save_plot
+from yolact.utils.plot import plot_prototype, plot_belief, save_plot
 import kornia.augmentation as A
 import kornia.geometry as G
 
@@ -79,7 +79,7 @@ trainval_objects = [
 ]
 
 falling_things_root = "~/Documents/falling_things/fat"
-results_root = "~/Documents/yolo_pose_runs"
+results_root = "~/Documents/yolact_runs"
 
 def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
     n_detections = [sample.valid.size(0) for sample in samples]
@@ -243,7 +243,7 @@ def plot_train_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: 
 
 
 
-def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, data_loader: DataLoader, device: torch.device):
+def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, data_loader: DataLoader, device: torch.device):
     model.train()
 
     for batch_i, batch in enumerate(data_loader):
@@ -278,7 +278,7 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
         # wandb.log({"train_point_loss": point_loss})
 
 
-def run_validation_epoch(epoch_i: int, model: YoloPose, data_loader: DataLoader, device: torch.device):
+def run_validation_epoch(epoch_i: int, model: Yolact, data_loader: DataLoader, device: torch.device):
     model.eval()
 
     avg_losses = torch.zeros(5, dtype=torch.float)
@@ -333,7 +333,7 @@ def main():
         checkpoint.unlink()
 
     # wandb.init(
-    #     project="yolo_pose",
+    #     project="yolact",
     #     config={
     #         **asdict(config),
     #         "lr": lr,
@@ -355,7 +355,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
 
-    model = YoloPose(config).to(device)
+    model = Yolact(config).to(device)
     initialize_weights(model, [model._backbone])
 
     # wandb.watch(model, log="all", log_freq=1)

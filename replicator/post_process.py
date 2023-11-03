@@ -9,8 +9,10 @@ import re
 import json
 import numpy as np
 from typing import Dict
+from tqdm.contrib.concurrent import process_map
+from functools import partial
 
-from yolo_pose.datasets.segmentation_dataset.segmentation_dataset import SegmentationSample
+from datasets.segmentation_dataset.segmentation_dataset import SegmentationSample
 
 
 def get_id(path: pathlib.Path) -> str:
@@ -85,7 +87,7 @@ def post_process(rgb_path: pathlib.Path, background_path: pathlib.Path,
             seg_value = parse_seg_value(seg_instances[bbox_instances[i]])
             seg_mask = seg_raw == (torch.Tensor(seg_value).unsqueeze(1).unsqueeze(2) / 255)
 
-        seg[seg_mask[0] & seg_mask[1] & seg_mask[2] & seg_mask[3]] = i
+            seg[seg_mask[0] & seg_mask[1] & seg_mask[2] & seg_mask[3]] = i
 
     sample = SegmentationSample(
         img=img,
@@ -98,6 +100,11 @@ def post_process(rgb_path: pathlib.Path, background_path: pathlib.Path,
     out_id = id.zfill(8)
     sample.save(out_dir, out_id)
 
+def f(rgb_path, background_paths, in_dir, background_dir, out_dir, class_names):
+    background_path = random.choice(background_paths)
+    post_process(rgb_path, background_path, in_dir, background_dir, out_dir, class_names)
+
+
 def run(in_dir: pathlib.Path, background_dir: pathlib.Path, out_dir: pathlib.Path):
     rgb_paths = glob.glob("rgb_*.png", root_dir=in_dir)
     rgb_paths = [in_dir / rgb_path for rgb_path in rgb_paths]
@@ -108,9 +115,8 @@ def run(in_dir: pathlib.Path, background_dir: pathlib.Path, out_dir: pathlib.Pat
     # TODO: READ CLASS NAMES
     class_names = {"torpedo_target": 0, "torpedo_target_open": 1, "torpedo_target_closed": 2}
 
-    for rgb_path in rgb_paths:
-        background_path = random.choice(background_paths)
-        post_process(rgb_path, background_path, in_dir, background_dir, out_dir, class_names)
+    f_partial = partial(f, background_paths=background_paths, in_dir=in_dir, background_dir=background_dir, out_dir=out_dir, class_names=class_names)
+    process_map(f_partial, rgb_paths)
 
 
 def main():

@@ -81,7 +81,7 @@ class SegmentationSample:
         bounding_boxes = torch.zeros((n_detections, 4), dtype=torch.float)
 
         for i, detection in enumerate(meta["detections"]):
-            classifications[i] = detection["classification"]
+            classifications[i] = detection["classification"] + 1
             bounding_boxes[i] = torch.Tensor([
                 detection["y"],
                 detection["x"],
@@ -95,6 +95,7 @@ class SegmentationSample:
         to_tensor = T.ToTensor()
         img = to_tensor(img_pil)
         seg = to_tensor(seg_pil)[0]
+        seg = (255 * seg).to(torch.uint8)
 
         sample = cls(
             img=img,

@@ -52,8 +52,8 @@ class Model(nn.Module):
 
 def main():
     pil_imgs = [
-        Image.open("../../../img/000000.left.jpg"),
-        Image.open("../../../img/000001.left.jpg"),
+        Image.open("../../img/000000.left.jpg"),
+        Image.open("../../img/000001.left.jpg"),
     ]
 
     train_set = [

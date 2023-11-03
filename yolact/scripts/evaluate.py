@@ -4,8 +4,8 @@ from typing import List
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from yolo_pose.model.config import Config
-from yolo_pose.model.model import YoloPose
+from yolact.model.config import Config
+from yolact.model.model import Yolact
 from datasets.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
 
 
@@ -38,7 +38,7 @@ config = Config(
 )
 
 falling_things_root = "~/Documents/falling_things/fat"
-weights_root = "~/Documents/yolo_pose/weights"
+weights_root = "~/Documents/yolact/weights"
 
 test_environments = [
     FallingThingsEnvironment.Kitchen0,
@@ -104,7 +104,7 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
 
 
 def main():
-    model = YoloPose(config)
+    model = Yolact(config)
     model.load_state_dict(torch.load(Path(weights_root).expanduser() / "30.pt", map_location=torch.device("cpu")))
 
     test_dataset = FallingThingsDataset(

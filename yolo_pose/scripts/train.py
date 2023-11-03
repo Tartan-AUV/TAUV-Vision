@@ -1,5 +1,4 @@
 import torch
-import os
 from torch.utils.data import DataLoader, random_split
 import torch.nn.functional as F
 import torchvision.transforms as transforms
@@ -14,8 +13,8 @@ from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose, create_belief, create_affinity
 from yolo_pose.model.weights import initialize_weights
-from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
-from yolo_pose.scripts.utils.plot import plot_prototype, plot_belief, save_plot
+from datasets.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
+from yolo_pose.scripts.utils.plot import plot_belief, save_plot
 
 torch.autograd.set_detect_anomaly(True)
 
