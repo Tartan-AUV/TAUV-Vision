@@ -36,7 +36,7 @@ class YoloPose(nn.Module):
         fpn_outputs = self._feature_pyramid(backbone_outputs)
 
         mask_prototype = self._masknet(fpn_outputs[0])
-        belief_prototypes, affinity_prototypes = self._pointnet(backbone_outputs[1])
+        belief_prototypes, affinity_prototypes = self._pointnet(fpn_outputs[1])
 
         classifications = []
         box_encodings = []

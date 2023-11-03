@@ -3,4 +3,5 @@ __pycache__/
 .DS_STORE
 wandb/
 weights/
+models/
 yolo_pose/scripts/out/

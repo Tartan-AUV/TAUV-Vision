@@ -16,8 +16,11 @@ from yolo_pose.model.config import Config
 from yolo_pose.model.loss import loss
 from yolo_pose.model.model import YoloPose, create_belief, create_affinity
 from yolo_pose.model.weights import initialize_weights
+from yolo_pose.model.boxes import box_to_corners, corners_to_box
 from yolo_pose.falling_things_dataset.falling_things_dataset import FallingThingsDataset, FallingThingsVariant, FallingThingsEnvironment, FallingThingsSample, FallingThingsObject
 from yolo_pose.scripts.utils.plot import plot_prototype, plot_belief, save_plot
+import kornia.augmentation as A
+import kornia.geometry as G
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -45,7 +48,7 @@ config = Config(
     affinity_depth=16,
     n_prediction_head_layers=1,
     n_fpn_downsample_layers=2,
-    belief_sigma=4,
+    belief_sigma=16,
     affinity_radius=16,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
@@ -136,24 +139,43 @@ def collate_samples(samples: List[FallingThingsSample]) -> FallingThingsSample:
 
 
 def transform_sample(sample: FallingThingsSample) -> FallingThingsSample:
-    color_transforms = transforms.Compose([
-        transforms.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter),
-        transforms.Normalize(mean=img_mean, std=img_stddev),
-    ])
+    # color_transforms = transforms.Compose([
+    #     transforms.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter),
+    #     transforms.Normalize(mean=img_mean, std=img_stddev),
+    # ])
+    #
+    color_transforms = A.AugmentationSequential(
+        A.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter),
+        A.Normalize(mean=img_mean, std=img_stddev)
+    )
 
-    img = color_transforms(sample.img)
-    seg_map = sample.seg_map
-    depth_map = sample.depth_map
+    perspective_transform = A.RandomPerspective(distortion_scale=0.5, p=1.0)
+
+    # img = color_transforms(sample.img)
+    img = perspective_transform(sample.img)
+    seg_map = perspective_transform(sample.seg_map.unsqueeze(1).to(torch.float32), params=perspective_transform._params).squeeze(1).to(torch.uint8)
+    depth_map = perspective_transform(sample.depth_map.unsqueeze(1), params=perspective_transform._params).squeeze(1)
+
+    M = perspective_transform.get_transformation_matrix(img, params=perspective_transform._params)
+
+    projected_cuboids = G.transform_points(M, sample.projected_cuboids.flip(dims=(-1,))).flip(dims=(-1,))
+
+    size = torch.Tensor([img.size(2), img.size(3), img.size(2), img.size(3)]).unsqueeze(0).unsqueeze(1)
+    corners = box_to_corners(sample.bounding_boxes) * size
+    corners_transformed = G.transform_bbox(M, corners[:, :, [1, 0, 3, 2]], mode="xyxy")[:, :, [1, 0, 3, 2]]
+    bounding_boxes = corners_to_box(corners_transformed / size)
+
+    img = color_transforms(img)
 
     transformed_sample = FallingThingsSample(
         intrinsics=sample.intrinsics,
         valid=sample.valid,
         classifications=sample.classifications,
-        bounding_boxes=sample.bounding_boxes,
+        bounding_boxes=bounding_boxes,
         camera_pose=sample.camera_pose,
         poses=sample.poses,
         cuboids=sample.cuboids,
-        projected_cuboids=sample.projected_cuboids,
+        projected_cuboids=projected_cuboids,
         img=img,
         seg_map=seg_map,
         depth_map=depth_map,
@@ -165,22 +187,17 @@ def prepare_batch(batch: FallingThingsSample, device: torch.device) -> Tuple[tor
     img = batch.img.to(device)
     size = torch.tensor([img.size(2), img.size(3)], device=device)
     points = batch.projected_cuboids.to(device)
-    bounding_boxes = batch.bounding_boxes.to(device)
 
     belief = torch.zeros((points.size(0), points.size(1), 9, img.size(2), img.size(3)), device=device)
     for batch_i in range(points.size(0)):
         for match_i in range(points.size(1)):
-            center = bounding_boxes[batch_i, match_i][0:2] * size
-            belief[batch_i, match_i, 1:] = create_belief(size, points[batch_i, match_i], config.belief_sigma,
+            belief[batch_i, match_i] = create_belief(size, points[batch_i, match_i], config.belief_sigma,
                                                          device=device)
-            belief[batch_i, match_i, 0] = create_belief(size, center.unsqueeze(0), config.belief_sigma,
-                                                        device=device)
 
     affinity = torch.zeros((points.size(0), points.size(1), 16, img.size(2), img.size(3)), device=device)
     for batch_i in range(points.size(0)):
-        for match_i in range(points.size(1)):
-            center = bounding_boxes[batch_i, match_i][0:2] * size
-            affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i], center,
+        for match_i in range(points.size(1) - 1):
+            affinity[batch_i, match_i] = create_affinity(size, points[batch_i, match_i + 1], points[batch_i, 0],
                                                          config.affinity_radius, device=device)
 
     truth = (
@@ -210,7 +227,7 @@ def plot_train_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: 
 
         detections = torch.argmax(classification[sample_i], dim=-1).nonzero().squeeze(-1)
 
-        if len(detections) < n_detections:
+        if len(detections) <= n_detections:
             for detection_i in detections:
                 belief = torch.matmul(
                     belief_coeff[sample_i, detection_i],
@@ -238,6 +255,7 @@ def run_train_epoch(epoch_i: int, model: YoloPose, optimizer: torch.optim.Optimi
     for batch_i, batch in enumerate(data_loader):
         print(f"train epoch {epoch_i}, batch {batch_i}")
 
+        batch = transform_sample(batch)
         img, truth = prepare_batch(batch, device=device)
 
         optimizer.zero_grad()

@@ -208,11 +208,6 @@ class FallingThingsDataset(Dataset):
         ]
         cuboids = torch.Tensor(cuboids)
 
-        projected_cuboids = [
-            object["projected_cuboid"] for object in left_data["objects"]
-        ]
-        projected_cuboids = torch.Tensor(projected_cuboids).flip(-1)
-
         camera_pose = left_data["camera_data"]["location_worldframe"] + left_data["camera_data"]["quaternion_xyzw_worldframe"]
         camera_pose = torch.Tensor(camera_pose)
         camera_pose[0:3] /= 100
@@ -243,8 +238,12 @@ class FallingThingsDataset(Dataset):
         corners[:, 3] = corners[:, 3] / img.size(2)
         bounding_boxes = corners_to_box(corners.unsqueeze(0)).squeeze(0)
 
-        # TODO: Do the funky math here
-        # position_map = get_position_map(camera_pose, poses, classifications, seg, depth, intrinsics)
+        projected_cuboids = [
+            object["projected_cuboid"] for object in left_data["objects"]
+        ]
+        projected_cuboids = torch.Tensor(projected_cuboids).flip(-1)
+        centers = bounding_boxes[:, 0:2] * torch.Tensor([img.size(1), img.size(2)]).unsqueeze(0)
+        projected_cuboids = torch.cat((centers.unsqueeze(1), projected_cuboids), dim=1)
 
         sample = FallingThingsSample(
             intrinsics=intrinsics,
