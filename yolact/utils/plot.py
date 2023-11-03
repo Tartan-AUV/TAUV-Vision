@@ -37,19 +37,18 @@ def plot_prototype(prototype: torch.Tensor) -> plt.Figure:
 
 def plot_detection(img: torch.Tensor,
                    classification: torch.Tensor, box: torch.Tensor,
-                   truth_valid: torch.Tensor, truth_classification: torch.Tensor, truth_box: torch.Tensor) -> plt.Figure:
+                   truth_valid: Optional[torch.Tensor], truth_classification: Optional[torch.Tensor], truth_box: Optional[torch.Tensor]) -> plt.Figure:
     fig = plt.figure()
 
     plt.imshow(img.permute(1, 2, 0).detach().cpu())
 
     size = torch.Tensor([img.size(1), img.size(2), img.size(1), img.size(2)]).to(box.device)
     corners = box_to_corners(box.unsqueeze(0)).squeeze(0) * size
-    truth_corners = box_to_corners(truth_box.unsqueeze(0)).squeeze(0) * size
 
     cmap = matplotlib.colormaps.get_cmap("tab10")
 
     for i in range(corners.size(0)):
-        y0, x0, y1, x1 = corners[i].cpu()
+        y0, x0, y1, x1 = corners[i].detach().cpu()
         rect = plt.Rectangle(
             (x0, y0), (x1 - x0), (y1 - y0),
             linewidth=1,
@@ -59,19 +58,22 @@ def plot_detection(img: torch.Tensor,
         )
         plt.gca().add_patch(rect)
 
-    for i in range(truth_corners.size(0)):
-        if not truth_valid[i]:
-            continue
+    if truth_valid is not None:
+        truth_corners = box_to_corners(truth_box.unsqueeze(0)).squeeze(0) * size
 
-        y0, x0, y1, x1 = truth_corners[i].cpu()
-        rect = plt.Rectangle(
-            (x0, y0), (x1 - x0), (y1 - y0),
-            linewidth=1,
-            linestyle="dashed",
-            edgecolor=cmap(int(truth_classification[i])),
-            facecolor="none"
-        )
-        plt.gca().add_patch(rect)
+        for i in range(truth_corners.size(0)):
+            if not truth_valid[i]:
+                continue
+
+            y0, x0, y1, x1 = truth_corners[i].detach().cpu()
+            rect = plt.Rectangle(
+                (x0, y0), (x1 - x0), (y1 - y0),
+                linewidth=1,
+                linestyle="dashed",
+                edgecolor=cmap(int(truth_classification[i])),
+                facecolor="none"
+            )
+            plt.gca().add_patch(rect)
 
     return fig
 
