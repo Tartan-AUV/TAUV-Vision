@@ -112,6 +112,6 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
 
     mask_loss = mask_losses.sum() / positive_match.sum()
 
-    total_loss = classification_loss + box_loss + mask_loss
+    total_loss = classification_loss + 10 * box_loss + 10 * mask_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss)

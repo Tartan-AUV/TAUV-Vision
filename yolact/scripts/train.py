@@ -43,7 +43,8 @@ lr = 1e-4
 momentum = 0.9
 weight_decay = 0
 n_epochs = 500
-n_warmup_epochs = 10
+# n_warmup_epochs = 10
+n_warmup_epochs = 0
 weight_save_interval = 10
 train_split = 0.9
 batch_size = 8
@@ -169,31 +170,32 @@ def plot_validation_batch(epoch_i: int, batch_i: int, img: torch.Tensor, predict
         wandb.log({f"val_prototype_{batch_i}_{sample_i}": prototype_fig})
         save_plot(prototype_fig, save_dir, f"val_prototype_{epoch_i}_{batch_i}_{sample_i}")
 
-        mask = assemble_mask(mask_prototype[sample_i], mask_coeff[sample_i, detections])
-        mask_fig = plot_mask(None, mask)
-        mask_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Masks")
-        mask_fig.set_size_inches(16, 10)
-        wandb.log({f"val_mask_{batch_i}_{sample_i}": mask_fig})
-        save_plot(mask_fig, save_dir, f"val_mask_{epoch_i}_{batch_i}_{sample_i}")
+        if len(detections) > 0:
+            mask = assemble_mask(mask_prototype[sample_i], mask_coeff[sample_i, detections])
+            mask_fig = plot_mask(None, mask)
+            mask_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Masks")
+            mask_fig.set_size_inches(16, 10)
+            wandb.log({f"val_mask_{batch_i}_{sample_i}": mask_fig})
+            save_plot(mask_fig, save_dir, f"val_mask_{epoch_i}_{batch_i}_{sample_i}")
 
-        mask_overlay_fig = plot_mask(img[sample_i], mask)
-        mask_overlay_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Mask Overlays")
-        mask_overlay_fig.set_size_inches(16, 10)
-        wandb.log({f"val_mask_overlay_{batch_i}_{sample_i}": mask_overlay_fig})
-        save_plot(mask_overlay_fig, save_dir, f"val_mask_overlay_{epoch_i}_{batch_i}_{sample_i}")
+            mask_overlay_fig = plot_mask(img[sample_i], mask)
+            mask_overlay_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Mask Overlays")
+            mask_overlay_fig.set_size_inches(16, 10)
+            wandb.log({f"val_mask_overlay_{batch_i}_{sample_i}": mask_overlay_fig})
+            save_plot(mask_overlay_fig, save_dir, f"val_mask_overlay_{epoch_i}_{batch_i}_{sample_i}")
 
-        box = box_decode(box_encoding, anchor)
-        detection_fig = plot_detection(
-            img[sample_i],
-            classification_max[detections],
-            box[sample_i, detections],
-            truth_valid[sample_i],
-            truth_classification[sample_i],
-            truth_box[sample_i],
-        )
-        detection_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Detections")
-        wandb.log({f"val_detection_{batch_i}_{sample_i}": detection_fig})
-        save_plot(detection_fig, save_dir, f"val_detection_{epoch_i}_{batch_i}_{sample_i}")
+            box = box_decode(box_encoding, anchor)
+            detection_fig = plot_detection(
+                img[sample_i],
+                classification_max[detections],
+                box[sample_i, detections],
+                truth_valid[sample_i],
+                truth_classification[sample_i],
+                truth_box[sample_i],
+            )
+            detection_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Detections")
+            wandb.log({f"val_detection_{batch_i}_{sample_i}": detection_fig})
+            save_plot(detection_fig, save_dir, f"val_detection_{epoch_i}_{batch_i}_{sample_i}")
 
 
 def run_validation_epoch(epoch_i: int, model: Yolact, data_loader: DataLoader, device: torch.device):
