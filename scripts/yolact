@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from yolact.wrapper import wrapper
+
+if __name__ == "__main__":
+    wrapper.main()

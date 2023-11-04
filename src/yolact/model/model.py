@@ -1,5 +1,4 @@
 import torch
-torch.autograd.detect_anomaly(check_nan=True)
 import torch.nn as nn
 from PIL import Image
 import torch.nn.functional as F
