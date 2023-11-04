@@ -22,7 +22,7 @@ torch.autograd.set_detect_anomaly(True)
 
 
 config = Config(
-    in_w=960,
+    in_w=960, # TODO: WRONG WRONG WRONG WRONG WRONG
     in_h=480,
     feature_depth=256,
     n_classes=3,
