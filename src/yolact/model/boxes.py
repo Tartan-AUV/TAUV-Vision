@@ -42,7 +42,7 @@ def box_encode(box: torch.Tensor, anchor: torch.Tensor) -> torch.Tensor:
 def box_decode(box_encoding: torch.Tensor, anchor: torch.Tensor) -> torch.Tensor:
     box = torch.cat((
         box_encoding[:, :, 0:2] + anchor[:, :, 0:2],
-        torch.exp(box_encoding[:, :, 2:4]) * anchor[:, :, 2:4],
+        torch.clamp(torch.exp(box_encoding[:, :, 2:4]), min=1e-4) * anchor[:, :, 2:4],
     ), dim=-1)
     return box
 
