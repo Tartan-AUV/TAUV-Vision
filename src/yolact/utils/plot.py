@@ -13,7 +13,8 @@ import pathlib
 def save_plot(fig: plt.Figure, save_dir: Optional[pathlib.Path], name: str):
     if save_dir is not None:
         save_path = save_dir / name
-        fig.savefig(save_path)
+        if save_path.exists():
+            fig.savefig(save_path)
     else:
         fig.show()
 

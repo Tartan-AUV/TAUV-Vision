@@ -18,12 +18,14 @@ from yolact.model.masks import assemble_mask
 from datasets.segmentation_dataset.segmentation_dataset import SegmentationDataset, SegmentationSample, SegmentationDatasetSet
 from yolact.utils.plot import save_plot, plot_prototype, plot_mask, plot_detection
 
-torch.autograd.set_detect_anomaly(True)
+# torch.autograd.set_detect_anomaly(True)
 
 
 config = Config(
-    in_w=960, # TODO: WRONG WRONG WRONG WRONG WRONG
-    in_h=480,
+    # in_w=1280,
+    # in_h=720,
+    in_w=640,
+    in_h=360,
     feature_depth=256,
     n_classes=3,
     n_prototype_masks=32,
@@ -45,18 +47,19 @@ weight_decay = 0
 n_epochs = 500
 # n_warmup_epochs = 10
 n_warmup_epochs = 0
-weight_save_interval = 10
+weight_save_interval = 1
 train_split = 0.9
-batch_size = 8
+batch_size = 32
 
 hue_jitter = 0.2
 saturation_jitter = 0.2
 brightness_jitter = 0.2
+contrast_jitter = 0.2
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
 
-dataset_root = pathlib.Path("~/Documents/torpedo_target_2").expanduser()
+dataset_root = pathlib.Path("~/Documents/torpedo_22_1").expanduser()
 results_root = pathlib.Path("~/Documents/yolact_runs").expanduser()
 
 
@@ -92,7 +95,8 @@ def collate_samples(samples: List[SegmentationSample]) -> SegmentationSample:
 
 def transform_sample(sample: SegmentationSample) -> SegmentationSample:
     color_transforms = T.Compose([
-        T.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter),
+        T.Resize((360, 640)),
+        T.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter, contrast=contrast_jitter),
         T.GaussianBlur(kernel_size=7),
         T.Normalize(mean=img_mean, std=img_stddev),
     ])
@@ -136,10 +140,16 @@ def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimize
 
         prediction = model(img)
 
+        classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
+        n_detections = torch.sum(torch.argmax(classification, dim=-1) > 0)
+
         total_loss, (classification_loss, box_loss, mask_loss) = loss(prediction, truth, config)
 
         print(f"total loss: {float(total_loss)}")
         print(f"classification loss: {float(classification_loss)}, box loss: {float(box_loss)}, mask loss: {float(mask_loss)}")
+
+        print(f"n detections: {float(n_detections)}")
+        wandb.log({"n_detections": n_detections})
 
         total_loss.backward()
 
@@ -196,6 +206,8 @@ def plot_validation_batch(epoch_i: int, batch_i: int, img: torch.Tensor, predict
             detection_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Detections")
             wandb.log({f"val_detection_{batch_i}_{sample_i}": detection_fig})
             save_plot(detection_fig, save_dir, f"val_detection_{epoch_i}_{batch_i}_{sample_i}")
+
+            plt.close("all")
 
 
 def run_validation_epoch(epoch_i: int, model: Yolact, data_loader: DataLoader, device: torch.device):
@@ -270,8 +282,7 @@ def main():
 
     model = Yolact(config).to(device)
     initialize_weights(model, [model._backbone])
-
-    wandb.watch(model, log="all", log_freq=1)
+    model.load_state_dict(torch.load("/home/theo/Downloads/14.pt", map_location=device))
 
     def lr_lambda(epoch):
         if epoch < n_warmup_epochs:
@@ -292,6 +303,8 @@ def main():
         shuffle=True,
         num_workers=4,
     )
+
+    wandb.watch(model, log="all", log_freq=len(train_dataloader))
 
     val_dataloader = DataLoader(
         val_dataset,
