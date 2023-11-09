@@ -11,6 +11,8 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Optional
 
+from yolact.model.boxes import box_xy_swap
+
 
 class SegmentationDatasetSet(Enum):
     TRAIN = "train"
@@ -65,7 +67,7 @@ class SegmentationSample:
         seg_pil.save(seg_path)
 
     @classmethod
-    def load(cls, set_path: pathlib.Path, id: str):
+    def load(cls, set_path: pathlib.Path, id: str, transform: Optional = None):
         json_path = (set_path / id).with_suffix(".json")
         img_path = (set_path / id).with_suffix(".png")
         seg_path = (set_path / f"{id}_seg").with_suffix(".png")
@@ -74,28 +76,44 @@ class SegmentationSample:
         with open(json_path, "r") as fp:
             meta = json.load(fp)
 
-        n_detections = len(meta["detections"])
-
-        valid = torch.full((n_detections,), fill_value=True, dtype=torch.bool)
-        classifications = torch.zeros(n_detections, dtype=torch.long)
-        bounding_boxes = torch.zeros((n_detections, 4), dtype=torch.float)
-
-        for i, detection in enumerate(meta["detections"]):
-            classifications[i] = detection["classification"] + 1
-            bounding_boxes[i] = torch.Tensor([
-                detection["y"],
-                detection["x"],
-                detection["h"],
-                detection["w"],
-            ])
-
         img_pil = Image.open(img_path)
         seg_pil = Image.open(seg_path)
 
-        to_tensor = T.ToTensor()
-        img = to_tensor(img_pil)
-        seg = to_tensor(seg_pil)[0]
+        img_np = np.array(img_pil)
+        seg_np = np.array(seg_pil)[:, :, 0]
+
+        n_detections = len(meta["detections"])
+
+        valid = torch.full((n_detections,), fill_value=True, dtype=torch.bool)
+        classifications_np = np.zeros(n_detections, dtype=np.int64)
+        bounding_boxes_np = np.zeros((n_detections, 4))
+
+        for i, detection in enumerate(meta["detections"]):
+            classifications_np[i] = detection["classification"] + 1
+            bounding_boxes_np[i] = torch.Tensor([
+                detection["x"],
+                detection["y"],
+                detection["w"],
+                detection["h"],
+            ])
+
+        if transform is not None:
+            transformed = transform(
+                image=img_np,
+                mask=seg_np,
+                bboxes=bounding_boxes_np,
+                classifications=classifications_np,
+            )
+
+            img_np = transformed["image"]
+            seg_np = transformed["mask"]
+            bounding_boxes_np = transformed["bboxes"]
+
+        img = T.ToTensor()(img_np)
+        seg = T.ToTensor()(seg_np)[0]
         seg = (255 * seg).to(torch.uint8)
+        classifications = torch.Tensor(classifications_np).to(torch.long)
+        bounding_boxes = box_xy_swap(torch.Tensor(bounding_boxes_np).unsqueeze(0)).squeeze(0)
 
         sample = cls(
             img=img,
@@ -110,11 +128,13 @@ class SegmentationSample:
 
 class SegmentationDataset(Dataset):
 
-    def __init__(self, root: pathlib.Path, set: SegmentationDatasetSet):
+    def __init__(self, root: pathlib.Path, set: SegmentationDatasetSet, transform: Optional = None):
         super().__init__()
 
         self._root_path: pathlib.Path = root
         self._set: SegmentationDatasetSet = set
+
+        self._transform: Optional = transform
 
         if not self._root_path.is_dir():
             raise ValueError(f"No such directory: {self._root_path}")
@@ -126,15 +146,13 @@ class SegmentationDataset(Dataset):
 
         self._ids: [str] = SegmentationDataset.get_ids(self._set_path)
 
-        pass
-
     def __len__(self) -> int:
         return len(self._ids)
 
     def __getitem__(self, i: int) -> SegmentationSample:
         id = self._ids[i]
 
-        return SegmentationSample.load(self._set_path, id)
+        return SegmentationSample.load(self._set_path, id, transform=self._transform)
 
     @staticmethod
     def get_ids(path: pathlib.Path) -> [str]:

@@ -14,7 +14,11 @@ class Config:
 
     n_masknet_layers_pre_upsample: int
     n_masknet_layers_post_upsample: int
-    n_prediction_head_layers: int
+
+    n_classification_layers: int
+    n_box_layers: int
+    n_mask_layers: int
+
     n_fpn_downsample_layers: int
 
     anchor_scales: (int, ...)

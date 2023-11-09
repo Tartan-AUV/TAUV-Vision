@@ -57,11 +57,10 @@ def main():
     ids = list(filter(lambda id: id not in val_ids, ids))
     print(f"assigning {len(val_ids)} to val")
 
-    test_ids = random.sample(ids, round(test_split * n_ids))
-    ids = list(filter(lambda id: id not in test_ids, ids))
+    # test_ids = random.sample(ids, round(test_split * n_ids))
+    # ids = list(filter(lambda id: id not in test_ids, ids))
+    test_ids = ids
     print(f"assigning {len(test_ids)} to test")
-
-    print(f"{len(ids)} not assigned")
 
     for id in train_ids:
         names = glob.glob(f"{id}*", root_dir=in_dir)

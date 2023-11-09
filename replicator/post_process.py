@@ -52,7 +52,7 @@ def post_process(rgb_path: pathlib.Path, background_path: pathlib.Path,
     img_a_np = img_np[:, :, 3].astype(np.float32) / 255
 
     background_lighting_np = np.array([np.mean(background_np[:, :, 0]), np.mean(background_np[:, :, 1]), np.mean(background_np[:, :, 2])]) + np.random.uniform(-0.05, 0.05, (3,))
-    beta = np.random.uniform(0.3, 0.5)
+    beta = np.random.uniform(0.1, 0.2)
 
     transmission_np = np.maximum(np.exp(-beta * depth_np), 0.1)
     img_rgb_adj_np = np.expand_dims(transmission_np, 2) * img_rgb_np + np.expand_dims(1 - transmission_np, 2) * background_lighting_np

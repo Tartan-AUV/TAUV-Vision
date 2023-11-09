@@ -8,12 +8,13 @@ import pathlib
 from dataclasses import asdict
 import wandb
 import matplotlib.pyplot as plt
+import albumentations as A
 
 from yolact.model.config import Config
 from yolact.model.loss import loss
 from yolact.model.model import Yolact
 from yolact.model.weights import initialize_weights
-from yolact.model.boxes import box_decode
+from yolact.model.boxes import box_decode, box_xy_swap
 from yolact.model.masks import assemble_mask
 from datasets.segmentation_dataset.segmentation_dataset import SegmentationDataset, SegmentationSample, SegmentationDatasetSet
 from yolact.utils.plot import save_plot, plot_prototype, plot_mask, plot_detection
@@ -26,12 +27,14 @@ config = Config(
     # in_h=720,
     in_w=640,
     in_h=360,
-    feature_depth=256,
+    feature_depth=32,
     n_classes=3,
     n_prototype_masks=32,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
-    n_prediction_head_layers=1,
+    n_classification_layers=0,
+    n_box_layers=0,
+    n_mask_layers=0,
     n_fpn_downsample_layers=2,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
@@ -41,25 +44,20 @@ config = Config(
 )
 
 
-lr = 1e-4
+lr = 1e-3
 momentum = 0.9
-weight_decay = 0
-n_epochs = 500
+weight_decay = 1e-4
+n_epochs = 60
 # n_warmup_epochs = 10
 n_warmup_epochs = 0
 weight_save_interval = 1
 train_split = 0.9
 batch_size = 32
 
-hue_jitter = 0.2
-saturation_jitter = 0.2
-brightness_jitter = 0.2
-contrast_jitter = 0.2
-
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
 
-dataset_root = pathlib.Path("~/Documents/torpedo_22_1").expanduser()
+dataset_root = pathlib.Path("~/Documents/torpedo_22_2").expanduser()
 results_root = pathlib.Path("~/Documents/yolact_runs").expanduser()
 
 
@@ -93,27 +91,6 @@ def collate_samples(samples: List[SegmentationSample]) -> SegmentationSample:
     return sample
 
 
-def transform_sample(sample: SegmentationSample) -> SegmentationSample:
-    color_transforms = T.Compose([
-        T.Resize((360, 640)),
-        T.ColorJitter(hue=hue_jitter, saturation=saturation_jitter, brightness=brightness_jitter, contrast=contrast_jitter),
-        T.GaussianBlur(kernel_size=7),
-        T.Normalize(mean=img_mean, std=img_stddev),
-    ])
-
-    img = color_transforms(sample.img)
-
-    transformed_sample = SegmentationSample(
-        img=img,
-        seg=sample.seg,
-        valid=sample.valid,
-        classifications=sample.classifications,
-        bounding_boxes=sample.bounding_boxes,
-    )
-
-    return transformed_sample
-
-
 def prepare_batch(batch: SegmentationSample, device: torch.device) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
     img = batch.img.to(device)
 
@@ -127,18 +104,65 @@ def prepare_batch(batch: SegmentationSample, device: torch.device) -> Tuple[torc
     return img, truth
 
 
+def plot_train_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: Tuple[torch.Tensor, ...], truth: Tuple[torch.Tensor, ...], save_dir: Optional[pathlib.Path] = None):
+    classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
+    truth_valid, truth_classification, truth_box, truth_seg_map = truth
+
+    n_batch = img.size(0)
+
+    for sample_i in [0]:
+        classification_max = torch.argmax(classification[sample_i], dim=-1).squeeze(0)
+        detections = classification_max.nonzero().squeeze(-1)[:100]
+
+        prototype_fig = plot_prototype(mask_prototype[sample_i])
+        prototype_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Prototypes")
+        prototype_fig.set_size_inches(16, 10)
+        wandb.log({f"train_prototype_{batch_i}_{sample_i}": prototype_fig})
+        save_plot(prototype_fig, save_dir, f"train_prototype_{epoch_i}_{batch_i}_{sample_i}")
+
+        if len(detections) > 0:
+            mask = assemble_mask(mask_prototype[sample_i], mask_coeff[sample_i, detections], box=None)
+            mask_fig = plot_mask(None, mask)
+            mask_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Masks")
+            mask_fig.set_size_inches(16, 10)
+            wandb.log({f"train_mask_{batch_i}_{sample_i}": mask_fig})
+            save_plot(mask_fig, save_dir, f"train_mask_{epoch_i}_{batch_i}_{sample_i}")
+
+            mask_overlay_fig = plot_mask(img[sample_i], mask)
+            mask_overlay_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Mask Overlays")
+            mask_overlay_fig.set_size_inches(16, 10)
+            wandb.log({f"train_mask_overlay_{batch_i}_{sample_i}": mask_overlay_fig})
+            save_plot(mask_overlay_fig, save_dir, f"train_mask_overlay_{epoch_i}_{batch_i}_{sample_i}")
+
+            box = box_decode(box_encoding, anchor)
+            detection_fig = plot_detection(
+                img[sample_i],
+                classification_max[detections],
+                box[sample_i, detections],
+                truth_valid[sample_i],
+                truth_classification[sample_i],
+                truth_box[sample_i],
+            )
+            detection_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Detections")
+            wandb.log({f"train_detection_{batch_i}_{sample_i}": detection_fig})
+            save_plot(detection_fig, save_dir, f"train_detection_{epoch_i}_{batch_i}_{sample_i}")
+
+            plt.close("all")
+
+
 def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, data_loader: DataLoader, device: torch.device):
     model.train()
 
     for batch_i, batch in enumerate(data_loader):
         print(f"train epoch {epoch_i}, batch {batch_i}")
-        batch = transform_sample(batch)
-
         img, truth = prepare_batch(batch, device=device)
 
         optimizer.zero_grad()
 
         prediction = model(img)
+
+        if batch_i == len(data_loader) - 1:
+            plot_train_batch(epoch_i, batch_i, img, prediction, truth, save_dir=pathlib.Path("./out"))
 
         classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
         n_detections = torch.sum(torch.argmax(classification, dim=-1) > 0)
@@ -170,7 +194,7 @@ def plot_validation_batch(epoch_i: int, batch_i: int, img: torch.Tensor, predict
 
     n_batch = img.size(0)
 
-    for sample_i in range(n_batch):
+    for sample_i in range(max(n_batch, 4)):
         classification_max = torch.argmax(classification[sample_i], dim=-1).squeeze(0)
         detections = classification_max.nonzero().squeeze(-1)[:100]
 
@@ -181,7 +205,7 @@ def plot_validation_batch(epoch_i: int, batch_i: int, img: torch.Tensor, predict
         save_plot(prototype_fig, save_dir, f"val_prototype_{epoch_i}_{batch_i}_{sample_i}")
 
         if len(detections) > 0:
-            mask = assemble_mask(mask_prototype[sample_i], mask_coeff[sample_i, detections])
+            mask = assemble_mask(mask_prototype[sample_i], mask_coeff[sample_i, detections], box=None)
             mask_fig = plot_mask(None, mask)
             mask_fig.suptitle(f"Epoch {epoch_i} Batch {batch_i} Sample {sample_i} Masks")
             mask_fig.set_size_inches(16, 10)
@@ -270,9 +294,6 @@ def main():
             "weight_save_interval": weight_save_interval,
             "train_split": train_split,
             "batch_size": batch_size,
-            "hue_jitter": hue_jitter,
-            "saturation_jitter": saturation_jitter,
-            "brightness_jitter": brightness_jitter,
             "img_mean": img_mean,
             "img_stddev": img_stddev,
         },
@@ -282,7 +303,7 @@ def main():
 
     model = Yolact(config).to(device)
     initialize_weights(model, [model._backbone])
-    model.load_state_dict(torch.load("/home/theo/Downloads/14.pt", map_location=device))
+    # model.load_state_dict(torch.load("/home/theo/Downloads/14.pt", map_location=device))
 
     def lr_lambda(epoch):
         if epoch < n_warmup_epochs:
@@ -293,8 +314,28 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-    train_dataset = SegmentationDataset(dataset_root, SegmentationDatasetSet.TRAIN)
-    val_dataset = SegmentationDataset(dataset_root, SegmentationDatasetSet.VALIDATION)
+    train_transform = A.Compose(
+        [
+            A.Resize(height=360, width=640),
+            A.HorizontalFlip(),
+            A.ShiftScaleRotate(),
+            A.ColorJitter(),
+            A.ISONoise(),
+            A.Normalize(mean=img_mean, std=img_stddev),
+        ],
+        bbox_params=A.BboxParams(format="yolo", label_fields=["classifications"]),
+    )
+
+    val_transform = A.Compose(
+        [
+            A.Resize(height=360, width=640),
+            A.Normalize(mean=img_mean, std=img_stddev),
+        ],
+        bbox_params=A.BboxParams(format="yolo", label_fields=["classifications"]),
+    )
+
+    train_dataset = SegmentationDataset(dataset_root, SegmentationDatasetSet.TRAIN, transform=train_transform)
+    val_dataset = SegmentationDataset(dataset_root, SegmentationDatasetSet.VALIDATION, transform=val_transform)
 
     train_dataloader = DataLoader(
         train_dataset,

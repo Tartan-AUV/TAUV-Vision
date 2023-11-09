@@ -78,9 +78,15 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
     box_losses = torch.zeros(n_batch, device=device)
 
     for batch_i in range(n_batch):
+        # box_loss = F.smooth_l1_loss(
+        #     box[batch_i, positive_match[batch_i]],
+        #     truth_box[batch_i, match_index[batch_i, positive_match[batch_i]]],
+        #     reduction="none"
+        # ).sum()
         box_loss = F.smooth_l1_loss(
-            box[batch_i, positive_match[batch_i]],
-            truth_box[batch_i, match_index[batch_i, positive_match[batch_i]]],
+            box_encoding[batch_i, positive_match[batch_i]],
+            box_encode(truth_box[batch_i, match_index[batch_i, positive_match[batch_i]]].unsqueeze(0), anchor[0, positive_match[batch_i]].unsqueeze(0)).squeeze(0),
+            # truth_box[batch_i, match_index[batch_i, positive_match[batch_i]]],
             reduction="none"
         ).sum()
 
@@ -127,7 +133,7 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
 
     mask_loss = mask_losses.sum() / positive_match.sum()
 
-    total_loss = classification_loss + 100 * box_loss + mask_loss
+    total_loss = classification_loss + box_loss + mask_loss
     # total_loss = classification_loss
 
     return total_loss, (classification_loss, box_loss, mask_loss)

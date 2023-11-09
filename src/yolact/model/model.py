@@ -25,7 +25,7 @@ class Yolact(nn.Module):
         self._backbone = Resnet101Backbone(self._config)
         self._feature_pyramid = FeaturePyramid(self._backbone.depths, self._config)
         self._masknet = Masknet(self._config)
-        self._prediction_head = PredictionHead(self._config)
+        self._prediction_heads = nn.ModuleList([PredictionHead(self._config) for _ in range(len(self._config.anchor_scales))])
 
     def forward(self, img: torch.Tensor) -> (torch.Tensor, ...):
         backbone_outputs = self._backbone(img)
@@ -40,7 +40,7 @@ class Yolact(nn.Module):
         anchors = []
 
         for fpn_i, fpn_output in enumerate(fpn_outputs):
-            classification, box_encoding, mask_coeff = self._prediction_head(fpn_output)
+            classification, box_encoding, mask_coeff = self._prediction_heads[fpn_i](fpn_output)
 
             anchor = get_anchor(fpn_i, tuple(fpn_output.size()[2:4]), self._config).detach()
             anchor = anchor.to(box_encoding.device)
