@@ -90,7 +90,7 @@ class SegmentationSample:
 
         for i, detection in enumerate(meta["detections"]):
             classifications_np[i] = detection["classification"] + 1
-            bounding_boxes_np[i] = torch.Tensor([
+            bounding_boxes_np[i] = np.array([
                 detection["x"],
                 detection["y"],
                 detection["w"],
@@ -109,10 +109,28 @@ class SegmentationSample:
             seg_np = transformed["mask"]
             bounding_boxes_np = transformed["bboxes"]
 
+        n_detections = len(bounding_boxes_np)
+
         img = T.ToTensor()(img_np)
         seg = T.ToTensor()(seg_np)[0]
         seg = (255 * seg).to(torch.uint8)
         classifications = torch.Tensor(classifications_np).to(torch.long)
+
+        if n_detections == 0:
+            valid = torch.Tensor([False])
+            classifications = torch.Tensor([0]).to(torch.long)
+            bounding_boxes = torch.Tensor([[0, 0, 0, 0]])
+
+            sample = cls(
+                img=img,
+                seg=seg,
+                valid=valid,
+                classifications=classifications,
+                bounding_boxes=bounding_boxes,
+            )
+
+            return sample
+
         bounding_boxes = box_xy_swap(torch.Tensor(bounding_boxes_np).unsqueeze(0)).squeeze(0)
 
         sample = cls(

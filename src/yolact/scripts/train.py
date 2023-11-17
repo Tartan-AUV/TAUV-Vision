@@ -1,5 +1,7 @@
+import cv2
 import torch
 from torch.utils.data import DataLoader, random_split
+import itertools
 import torch.nn.functional as F
 import torchvision.transforms.v2 as T
 from typing import List, Tuple, Optional
@@ -38,8 +40,8 @@ config = Config(
     n_fpn_downsample_layers=2,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
-    iou_pos_threshold=0.5,
-    iou_neg_threshold=0.4,
+    iou_pos_threshold=0.4,
+    iou_neg_threshold=0.3,
     negative_example_ratio=3,
 )
 
@@ -53,11 +55,12 @@ n_warmup_epochs = 0
 weight_save_interval = 1
 train_split = 0.9
 batch_size = 32
+epoch_n_batches = 100
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
 
-dataset_root = pathlib.Path("~/Documents/torpedo_22_2").expanduser()
+dataset_root = pathlib.Path("~/Documents/2023-11-05").expanduser()
 results_root = pathlib.Path("~/Documents/yolact_runs").expanduser()
 
 
@@ -150,10 +153,21 @@ def plot_train_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: 
             plt.close("all")
 
 
+# From https://stackoverflow.com/questions/47714643/pytorch-data-loader-multiple-iterations
+def cycle(iterable):
+    while True:
+        for x in iterable:
+            yield x
+
 def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, data_loader: DataLoader, device: torch.device):
     model.train()
 
-    for batch_i, batch in enumerate(data_loader):
+    data_loader_cycle = iter(cycle(data_loader))
+
+    for batch_i, batch in enumerate(data_loader_cycle):
+        if batch_i >= epoch_n_batches:
+            break
+
         print(f"train epoch {epoch_i}, batch {batch_i}")
         img, truth = prepare_batch(batch, device=device)
 
@@ -161,7 +175,7 @@ def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimize
 
         prediction = model(img)
 
-        if batch_i == len(data_loader) - 1:
+        if batch_i == epoch_n_batches - 1:
             plot_train_batch(epoch_i, batch_i, img, prediction, truth, save_dir=pathlib.Path("./out"))
 
         classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
@@ -318,9 +332,15 @@ def main():
         [
             A.Resize(height=360, width=640),
             A.HorizontalFlip(),
-            A.ShiftScaleRotate(),
-            A.ColorJitter(),
-            A.ISONoise(),
+            A.ShiftScaleRotate(
+                shift_limit=(0.25, 0.25),
+                scale_limit=0.25,
+                border_mode=cv2.BORDER_CONSTANT,
+                value=0,
+                mask_value=255,
+                always_apply=True),
+            A.ColorJitter(always_apply=True),
+            A.ISONoise(always_apply=True),
             A.Normalize(mean=img_mean, std=img_stddev),
         ],
         bbox_params=A.BboxParams(format="yolo", label_fields=["classifications"]),

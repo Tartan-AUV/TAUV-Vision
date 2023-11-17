@@ -4,4 +4,6 @@ __pycache__/
 wandb/
 weights/
 models/
+img/
 yolo_pose/scripts/out/
+*.pyc
