@@ -4,13 +4,13 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import matplotlib.pyplot as plt
 
-from yolact.model.boxes import box_decode, box_encode, iou_matrix, box_to_mask
+from yolact.model.boxes import box_decode, box_encode, iou_matrix, box_to_mask, box_to_corners
 from yolact.model.config import Config
 
 
 def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Config) -> (torch.Tensor, (torch.Tensor, ...)):
     classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
-    truth_valid, truth_classification, truth_box, truth_seg_map = truth
+    truth_valid, truth_classification, truth_box, truth_seg_map, truth_img_valid = truth
 
     device = classification.device
 
@@ -48,6 +48,7 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
         #
         # gamma = 2
         # modulator = torch.exp(-gamma * F.one_hot(match_classification, num_classes=config.n_classes + 1) * classification[batch_i] - gamma * torch.log(torch.clamp(1 + torch.exp(-1 * classification[batch_i]), 1e-4)))
+        print(f"match_classification min: {match_classification.min()} max: {match_classification.max()}")
         classification_cross_entropy = F.cross_entropy(
             classification[batch_i],
             match_classification,
@@ -73,7 +74,10 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
 
         classification_losses[batch_i] = classification_loss
 
-    classification_loss = classification_losses.sum() / ((1 + config.negative_example_ratio) * positive_match.sum())
+    if positive_match.sum() > 0:
+        classification_loss = classification_losses.sum() / ((1 + config.negative_example_ratio) * positive_match.sum())
+    else:
+        classification_loss = classification_losses.sum()
 
     box_losses = torch.zeros(n_batch, device=device)
 
@@ -92,7 +96,10 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
 
         box_losses[batch_i] = box_loss
 
-    box_loss = box_losses.sum() / positive_match.sum()
+    if positive_match.sum() > 0:
+        box_loss = box_losses.sum() / positive_match.sum()
+    else:
+        box_loss = box_losses.sum()
 
     mask_losses = torch.zeros(n_batch, device=device)
 
@@ -122,16 +129,27 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Co
                 reduction="none",
             )
 
+            truth_img_valid_resized = F.interpolate(
+                truth_img_valid[batch_i].float().unsqueeze(0).unsqueeze(0),
+                match_mask.size(),
+                mode="nearest"
+            ).squeeze(0).squeeze(0)
+
             box_mask = box_to_mask(
                 truth_box[batch_i, match_index[batch_i, match_i]],
                 match_mask.size()
-            )
+            ) * truth_img_valid_resized
 
             mask_loss += (box_mask.reshape(-1) * mask_cross_entropy).sum() / truth_match_mask_resized.sum()
 
         mask_losses[batch_i] = mask_loss
 
-    mask_loss = mask_losses.sum() / positive_match.sum()
+    if positive_match.sum() > 0:
+        mask_loss = mask_losses.sum() / positive_match.sum()
+    else:
+        mask_loss = mask_losses.sum()
+
+    print(positive_match.sum())
 
     total_loss = classification_loss + box_loss + mask_loss
     # total_loss = classification_loss

@@ -41,18 +41,35 @@ def corners_to_box(corners: torch.Tensor) -> torch.Tensor:
 
 
 def box_encode(box: torch.Tensor, anchor: torch.Tensor) -> torch.Tensor:
-    box_encoding = torch.cat((
-        box[:, :, 0:2] - anchor[:, :, 0:2],
-        torch.log(box[:, :, 2:4] / anchor[:, :, 2:4]),
-    ), dim=-1)
+    # box_encoding = torch.cat((
+    #     box[:, :, 0:2] - anchor[:, :, 0:2],
+    #     torch.log(box[:, :, 2:4] / anchor[:, :, 2:4]),
+    # ), dim=-1)
+
+    variances = [0.1, 0.2]
+
+    g_cxcy = box[:, :, :2] - anchor[:, :, :2]
+    g_cxcy /= (variances[0] * anchor[:, :, 2:])
+    g_wh = box[:, :, 2:] / anchor[:, :, 2:]
+    g_wh = torch.log(g_wh) / variances[1]
+    box_encoding = torch.cat([g_cxcy, g_wh], -1)
+
     return box_encoding
 
 
 def box_decode(box_encoding: torch.Tensor, anchor: torch.Tensor) -> torch.Tensor:
+    # box = torch.cat((
+    #     box_encoding[:, :, 0:2] + anchor[:, :, 0:2],
+    #     torch.clamp(torch.exp(box_encoding[:, :, 2:4]), min=1e-4) * anchor[:, :, 2:4],
+    # ), dim=-1)
+
+    variances = [0.1, 0.2]
+
     box = torch.cat((
-        box_encoding[:, :, 0:2] + anchor[:, :, 0:2],
-        torch.clamp(torch.exp(box_encoding[:, :, 2:4]), min=1e-4) * anchor[:, :, 2:4],
-    ), dim=-1)
+        anchor[:, :, :2] + box_encoding[:, :, :2] * variances[0] * anchor[:, :, 2:],
+        anchor[:, :, 2:] * torch.exp(box_encoding[:, :, 2:] * variances[1])
+    ), -1)
+
     return box
 
 

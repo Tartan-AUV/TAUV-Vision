@@ -1,5 +1,7 @@
+import cv2
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, ConcatDataset
+import itertools
 import torch.nn.functional as F
 import torchvision.transforms.v2 as T
 from typing import List, Tuple, Optional
@@ -14,7 +16,7 @@ from yolact.model.config import Config
 from yolact.model.loss import loss
 from yolact.model.model import Yolact
 from yolact.model.weights import initialize_weights
-from yolact.model.boxes import box_decode, box_xy_swap
+from yolact.model.boxes import box_decode, box_xy_swap, box_to_corners, corners_to_box
 from yolact.model.masks import assemble_mask
 from datasets.segmentation_dataset.segmentation_dataset import SegmentationDataset, SegmentationSample, SegmentationDatasetSet
 from yolact.utils.plot import save_plot, plot_prototype, plot_mask, plot_detection
@@ -27,11 +29,12 @@ config = Config(
     # in_h=720,
     in_w=640,
     in_h=360,
-    feature_depth=32,
-    n_classes=3,
-    n_prototype_masks=32,
+    feature_depth=64,
+    n_classes=2,
+    n_prototype_masks=16,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
+    n_prediction_head_layers=1,
     n_classification_layers=0,
     n_box_layers=0,
     n_mask_layers=0,
@@ -45,19 +48,24 @@ config = Config(
 
 
 lr = 1e-3
+# lr = 1e-4
 momentum = 0.9
-weight_decay = 1e-4
-n_epochs = 60
-# n_warmup_epochs = 10
+weight_decay = 0
+n_epochs = 200
 n_warmup_epochs = 0
-weight_save_interval = 1
-train_split = 0.9
-batch_size = 32
+# n_warmup_epochs = 10
+weight_save_interval = 10
+batch_size = 96
+epoch_n_batches = 100
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
 
-dataset_root = pathlib.Path("~/Documents/torpedo_22_2").expanduser()
+train_dataset_roots = [
+    pathlib.Path("~/Documents/2023-11-05").expanduser(),
+    # pathlib.Path("~/Documents/torpedo_22_1_small").expanduser(),
+]
+val_dataset_root = pathlib.Path("~/Documents/2023-11-05").expanduser()
 results_root = pathlib.Path("~/Documents/yolact_runs").expanduser()
 
 
@@ -79,6 +87,11 @@ def collate_samples(samples: List[SegmentationSample]) -> SegmentationSample:
     ], dim=0)
     img = torch.stack([sample.img for sample in samples], dim=0)
     seg = torch.stack([sample.seg for sample in samples], dim=0)
+    img_valid = torch.stack([sample.img_valid for sample in samples], dim=0)
+
+    corners = box_to_corners(bounding_boxes)
+    corners = torch.clamp(corners, min=0, max=1)
+    bounding_boxes = corners_to_box(corners)
 
     sample = SegmentationSample(
         img=img,
@@ -86,6 +99,7 @@ def collate_samples(samples: List[SegmentationSample]) -> SegmentationSample:
         valid=valid,
         classifications=classifications,
         bounding_boxes=bounding_boxes,
+        img_valid=img_valid,
     )
 
     return sample
@@ -99,6 +113,7 @@ def prepare_batch(batch: SegmentationSample, device: torch.device) -> Tuple[torc
         batch.classifications.to(device),
         batch.bounding_boxes.to(device),
         batch.seg.to(device),
+        batch.img_valid.to(device),
     )
 
     return img, truth
@@ -106,7 +121,7 @@ def prepare_batch(batch: SegmentationSample, device: torch.device) -> Tuple[torc
 
 def plot_train_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: Tuple[torch.Tensor, ...], truth: Tuple[torch.Tensor, ...], save_dir: Optional[pathlib.Path] = None):
     classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
-    truth_valid, truth_classification, truth_box, truth_seg_map = truth
+    truth_valid, truth_classification, truth_box, truth_seg_map, truth_img_valid = truth
 
     n_batch = img.size(0)
 
@@ -149,11 +164,24 @@ def plot_train_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: 
 
             plt.close("all")
 
+        plt.close("all")
+
+
+# From https://stackoverflow.com/questions/47714643/pytorch-data-loader-multiple-iterations
+def cycle(iterable):
+    while True:
+        for x in iterable:
+            yield x
 
 def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler, data_loader: DataLoader, device: torch.device):
     model.train()
 
-    for batch_i, batch in enumerate(data_loader):
+    data_loader_cycle = iter(cycle(data_loader))
+
+    for batch_i, batch in enumerate(data_loader_cycle):
+        if batch_i >= epoch_n_batches:
+            break
+
         print(f"train epoch {epoch_i}, batch {batch_i}")
         img, truth = prepare_batch(batch, device=device)
 
@@ -161,7 +189,7 @@ def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimize
 
         prediction = model(img)
 
-        if batch_i == len(data_loader) - 1:
+        if batch_i == epoch_n_batches - 1:
             plot_train_batch(epoch_i, batch_i, img, prediction, truth, save_dir=pathlib.Path("./out"))
 
         classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
@@ -190,7 +218,7 @@ def run_train_epoch(epoch_i: int, model: Yolact, optimizer: torch.optim.Optimize
 
 def plot_validation_batch(epoch_i: int, batch_i: int, img: torch.Tensor, prediction: Tuple[torch.Tensor, ...], truth: Tuple[torch.Tensor, ...], save_dir: Optional[pathlib.Path] = None):
     classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
-    truth_valid, truth_classification, truth_box, truth_seg_map = truth
+    truth_valid, truth_classification, truth_box, truth_seg_map, truth_img_valid = truth
 
     n_batch = img.size(0)
 
@@ -233,6 +261,8 @@ def plot_validation_batch(epoch_i: int, batch_i: int, img: torch.Tensor, predict
 
             plt.close("all")
 
+        plt.close("all")
+
 
 def run_validation_epoch(epoch_i: int, model: Yolact, data_loader: DataLoader, device: torch.device):
     model.eval()
@@ -248,7 +278,7 @@ def run_validation_epoch(epoch_i: int, model: Yolact, data_loader: DataLoader, d
 
             prediction = model.forward(img)
 
-            if batch_i == 0:
+            if batch_i == 0 and epoch_i > 0:
                 plot_validation_batch(epoch_i, batch_i, img, prediction, truth, save_dir=pathlib.Path("./out"))
 
             total_loss, (classification_loss, box_loss, mask_loss) = loss(prediction, truth, config)
@@ -292,7 +322,6 @@ def main():
             "n_epochs": n_epochs,
             "n_warmup_epochs": n_warmup_epochs,
             "weight_save_interval": weight_save_interval,
-            "train_split": train_split,
             "batch_size": batch_size,
             "img_mean": img_mean,
             "img_stddev": img_stddev,
@@ -316,14 +345,30 @@ def main():
 
     train_transform = A.Compose(
         [
-            A.Resize(height=360, width=640),
-            A.HorizontalFlip(),
-            A.ShiftScaleRotate(),
-            A.ColorJitter(),
-            A.ISONoise(),
-            A.Normalize(mean=img_mean, std=img_stddev),
+            A.ChannelShuffle(p=0.5),
+            A.Resize(height=360, width=640, always_apply=True),
+            A.ColorJitter(p=0.5),
+            A.GaussNoise(p=0.5),
+            A.HorizontalFlip(p=0.5),
+            A.OneOf([
+                A.MotionBlur(p=1),
+                A.MedianBlur(blur_limit=3, p=1),
+                A.Blur(blur_limit=3, p=1),
+            ], p=0.5),
+            A.Affine(
+                scale=(0.9, 1.1),
+                keep_ratio=True,
+                translate_percent=(-0.25, 0.25),
+                rotate=(-30, 30),
+                shear=(-10, 10),
+                mode=cv2.BORDER_CONSTANT,
+                cval=0,
+                cval_mask=254,
+                p=0.5
+            ),
+            A.Normalize(mean=img_mean, std=img_stddev, always_apply=True),
         ],
-        bbox_params=A.BboxParams(format="yolo", label_fields=["classifications"]),
+        bbox_params=A.BboxParams(format="yolo", label_fields=["classifications"], min_visibility=0.1),
     )
 
     val_transform = A.Compose(
@@ -334,25 +379,29 @@ def main():
         bbox_params=A.BboxParams(format="yolo", label_fields=["classifications"]),
     )
 
-    train_dataset = SegmentationDataset(dataset_root, SegmentationDatasetSet.TRAIN, transform=train_transform)
-    val_dataset = SegmentationDataset(dataset_root, SegmentationDatasetSet.VALIDATION, transform=val_transform)
+    train_datasets = [
+        SegmentationDataset(dataset_root, SegmentationDatasetSet.TRAIN, transform=train_transform)
+        for dataset_root in train_dataset_roots
+    ]
+    train_dataset = ConcatDataset(train_datasets)
+    val_dataset = SegmentationDataset(val_dataset_root, SegmentationDatasetSet.VALIDATION, transform=val_transform)
 
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         collate_fn=collate_samples,
         shuffle=True,
-        num_workers=4,
+        num_workers=10,
     )
 
-    wandb.watch(model, log="all", log_freq=len(train_dataloader))
+    wandb.watch(model, log="all", log_freq=1000)
 
     val_dataloader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         collate_fn=collate_samples,
         shuffle=False,
-        num_workers=4,
+        num_workers=10,
     )
 
     for epoch_i in range(n_epochs):
