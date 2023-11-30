@@ -5,7 +5,6 @@ import torchvision.transforms as T
 from spatialmath import SE3, SO3
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
-import tf2_ros as tf2
 from typing import Dict
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from functools import partial
@@ -21,37 +20,11 @@ from tauv_util.spatialmath import ros_transform_to_se3, r3_to_ros_vector3, r3_to
 from tauv_msgs.msg import FeatureDetection, FeatureDetections
 
 from tauv_vision.yolact.model.model import Yolact
-from tauv_vision.yolact.model.config import ModelConfig
+from tauv_vision.yolact.model.config import ModelConfig, ClassConfigSet
 from tauv_vision.yolact.model.boxes import box_decode
 from tauv_vision.yolact.model.masks import assemble_mask
 from tauv_vision.yolact.model.nms import nms
 from tauv_vision.yolact.utils.plot import plot_detection
-
-
-config = ModelConfig(
-    in_w=640,
-    in_h=360,
-    feature_depth=64,
-    n_classes=2,
-    n_prototype_masks=16,
-    n_masknet_layers_pre_upsample=1,
-    n_masknet_layers_post_upsample=1,
-    n_prediction_head_layers=1,
-    n_classification_layers=0,
-    n_box_layers=0,
-    n_mask_layers=0,
-    n_fpn_downsample_layers=2,
-    anchor_scales=(24, 48, 96, 192, 384),
-    anchor_aspect_ratios=(1,),
-    iou_pos_threshold=0.4,
-    iou_neg_threshold=0.3,
-    negative_example_ratio=3,
-)
-
-classification_names = {0: "torpedo_22_bootlegger_circle", 1: "torpedo_22_bootlegger_trapezoid"}
-
-img_mean = (0.485, 0.456, 0.406)
-img_stddev = (0.229, 0.224, 0.225)
 
 
 def fig_to_np(fig):
@@ -68,19 +41,22 @@ class YolactNode:
     def __init__(self):
         self._load_config()
 
+        self._model_config: ModelConfig = ModelConfig.load(self._model_config_path)
+        self._class_config: ClassConfigSet = ClassConfigSet.load(self._class_config_path)
+
         self._tf_client: TransformClient = TransformClient()
 
         self._cv_bridge: CvBridge = CvBridge()
 
         self._device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._model: Yolact = Yolact(config).to(self._device)
+        self._model: Yolact = Yolact(self._model_config).to(self._device)
 
         rospy.logdebug(f"Loading weights from {self._weight_path}...")
         self._model.load_state_dict(torch.load(self._weight_path, map_location=self._device))
         rospy.logdebug("Done loading weights.")
 
         rospy.logdebug(f"Dry-running model...")
-        self._model(torch.rand(1, 3, config.in_h, config.in_w, device=self._device))
+        self._model(torch.rand(1, 3, self._model_config.in_h, self._model_config.in_w, device=self._device))
         rospy.logdebug(f"Done dry-running model.")
 
         self._camera_infos: Dict[str, CameraInfo] = {}
@@ -127,8 +103,8 @@ class YolactNode:
         start_time = time.time()
 
         img_raw = T.ToTensor()(color_np)
-        img = T.Resize((360, 640))(img_raw.unsqueeze(0))
-        img = T.Normalize(mean=img_mean, std=img_stddev)(img).to(self._device)
+        img = T.Resize((self._model_config.in_h, self._model_config.in_w))(img_raw.unsqueeze(0))
+        img = T.Normalize(mean=self._model_config.img_mean, std=self._model_config.img_stddev)(img).to(self._device)
 
         end_time = time.time()
         rospy.logdebug(f"Preprocessed image in {end_time - start_time} s")
@@ -145,7 +121,7 @@ class YolactNode:
         start_time = time.time()
 
         classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
-        box = box_decode(box_encoding, anchor, config)
+        box = box_decode(box_encoding, anchor, self._model_config)
         classification_max = torch.argmax(classification[0], dim=-1).squeeze(0)
         detections = nms(classification, box, self._topk, self._iou_threshold, self._confidence_threshold)
         if len(detections) == 0:
@@ -157,6 +133,7 @@ class YolactNode:
         end_time = time.time()
         rospy.logdebug(f"Processed prediction in {end_time - start_time} s")
 
+        # TODO: Do the better plotting from evaluate_batch.py
         detection_fig = plot_detection(
             img_raw,
             classification_max[detections],
@@ -195,7 +172,7 @@ class YolactNode:
         # TODO: detection_i vs detection is confusing
         for detection_i, detection in enumerate(detections):
             mask_np = mask[detection_i].detach().cpu().numpy()
-            classification_name = classification_names[int(classification_max[detection]) - 1]
+            class_name = self._class_config.get_by_index(int(classification_max[detection])).id
 
             e_x = float(box[0, detection, 1]) * color_np.shape[1]
             e_y = float(box[0, detection, 0]) * color_np.shape[0]
@@ -224,7 +201,7 @@ class YolactNode:
 
             detection_msg = FeatureDetection()
             detection_msg.confidence = 1
-            detection_msg.tag = classification_name
+            detection_msg.tag = class_name
             detection_msg.SE2 = False
             detection_msg.position = r3_to_ros_point(world_t_detection.t)
             rpy = world_t_detection.rpy()
@@ -240,6 +217,8 @@ class YolactNode:
         self._frame_ids: [str] = rospy.get_param("~frame_ids")
         self._tf_namespace: str = rospy.get_param("tf_namespace")
 
+        self._model_config_path: str = rospy.get_param("~model_config_path")
+        self._class_config_path: str = rospy.get_param("~class_config_path")
         self._weight_path: str = rospy.get_param("~weight_path")
         self._topk: int = rospy.get_param("~topk")
         self._iou_threshold: float = rospy.get_param("~iou_threshold")

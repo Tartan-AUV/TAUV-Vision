@@ -1,6 +1,7 @@
 from dataclasses import dataclass, asdict
 import json
 import pathlib
+from typing import Optional
 
 
 @dataclass
@@ -41,7 +42,7 @@ class ModelConfig:
             json.dump(asdict(self), fp, indent=2)
 
     @classmethod
-    def load_from_disk(cls, path: pathlib.Path):
+    def load(cls, path: pathlib.Path):
         with open(path, "r") as fp:
             data = json.load(fp)
         return cls(**data)
@@ -93,7 +94,36 @@ class TrainConfig:
             json.dump(asdict(self), fp, indent=2)
 
     @classmethod
-    def load_from_disk(cls, path: pathlib.Path):
+    def load(cls, path: pathlib.Path):
+        with open(path, "r") as fp:
+            data = json.load(fp)
+        return cls(**data)
+
+
+@dataclass
+class ClassConfig:
+    id: str
+    index: int # starts at 1
+
+
+@dataclass
+class ClassConfigSet:
+
+    configs: [ClassConfig]
+
+    def get_by_index(self, index: int) -> Optional[ClassConfig]:
+        for config in self.configs:
+            if config.index == index:
+                return config
+
+        return None
+
+    def save(self, path: pathlib.Path):
+        with open(path, "w") as fp:
+            json.dump(asdict(self), fp, indent=2)
+
+    @classmethod
+    def load(cls, path: pathlib.Path):
         with open(path, "r") as fp:
             data = json.load(fp)
         return cls(**data)

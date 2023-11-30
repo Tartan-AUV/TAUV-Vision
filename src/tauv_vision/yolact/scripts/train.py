@@ -10,7 +10,7 @@ import wandb
 import matplotlib.pyplot as plt
 import albumentations as A
 
-from tauv_vision.yolact.model.config import ModelConfig, TrainConfig
+from tauv_vision.yolact.model.config import ModelConfig, TrainConfig, ClassConfig, ClassConfigSet
 from tauv_vision.yolact.model.loss import loss
 from tauv_vision.yolact.model.model import Yolact
 from tauv_vision.yolact.model.weights import initialize_weights
@@ -78,6 +78,17 @@ train_config = TrainConfig(
     perspective_scale_limit=(0.0, 0.25),
     min_visibility=0.1,
 )
+
+class_config = ClassConfigSet([
+    ClassConfig(
+        id="torpedo_22_bootlegger_circle",
+        index=1,
+    ),
+    ClassConfig(
+        id="torpedo_22_bootlegger_trapezoid",
+        index=2,
+    ),
+])
 
 train_dataset_roots = [
     # pathlib.Path("~/Documents/2023-11-05").expanduser(),
@@ -342,19 +353,20 @@ def main():
     run = wandb.init(
         project="yolact",
         config={
-            "model": asdict(model_config),
-            "train": asdict(train_config),
+            "model_config": asdict(model_config),
+            "train_config": asdict(train_config),
+            "class_config": asdict(class_config),
             # TODO: Log datasets being trained on
-            # TODO: Log precursor models if restarting training
-            # TODO: Log class list
         },
     )
 
     model_config_path = save_dir / f"{run.name}_model_config.json"
     train_config_path = save_dir / f"{run.name}_train_config.json"
+    class_config_path = save_dir / f"{run.name}_class_config.json"
 
     model_config.save(model_config_path)
     train_config.save(train_config_path)
+    class_config.save(class_config_path)
 
     model_config_artifact = wandb.Artifact(name=f"{run.name}_model_config", type="model_config")
     model_config_artifact.add_file(model_config_path)
@@ -363,6 +375,10 @@ def main():
     train_config_artifact = wandb.Artifact(name=f"{run.name}_train_config", type="train_config")
     train_config_artifact.add_file(train_config_path)
     wandb.log_artifact(train_config_artifact)
+
+    class_config_artifact = wandb.Artifact(name=f"{run.name}_class_config", type="class_config")
+    class_config_artifact.add_file(class_config_path)
+    wandb.log_artifact(class_config_artifact)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
