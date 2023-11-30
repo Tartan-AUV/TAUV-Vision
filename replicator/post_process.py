@@ -13,7 +13,7 @@ from functools import partial
 from multiprocessing import Pool
 import matplotlib.pyplot as plt
 
-from datasets.segmentation_dataset.segmentation_dataset import SegmentationSample
+from tauv_vision.datasets.segmentation_dataset.segmentation_dataset import SegmentationSample
 
 
 def get_id(path: pathlib.Path) -> str:
