@@ -3,6 +3,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import ImageGrid
 from math import sqrt, ceil
+import numpy as np
+import cv2
 from typing import Optional
 import torch.nn.functional as F
 from typing import Optional
@@ -107,6 +109,49 @@ def plot_mask(img: Optional[torch.Tensor], mask: torch.Tensor, opacity: float = 
 
     return fig
 
+
+def plot_prediction_np(img_np: np.array, class_id_np: np.array, confidence_np: np.array, box_np: np.array, mask_np: np.array) -> np.array:
+    n_detections = len(class_id_np)
+
+    vis_img_np = img_np.copy()
+
+    cmap = matplotlib.colormaps.get_cmap("tab10")
+
+    for detection_i in range(n_detections):
+        color = cmap(int(class_id_np[detection_i]))
+        color = (255 * np.array(color)[:3])
+        color = (int(color[0]), int(color[1]), int(color[2]))
+
+        img_h = vis_img_np.shape[0]
+        img_w = vis_img_np.shape[1]
+
+        x0y0 = (
+            int(img_w * (box_np[detection_i, 1] - box_np[detection_i, 3] / 2)),
+            int(img_h * (box_np[detection_i, 0] - box_np[detection_i, 2] / 2)),
+        )
+
+        x1y1 = (
+            int(img_w * (box_np[detection_i, 1] + box_np[detection_i, 3] / 2)),
+            int(img_h * (box_np[detection_i, 0] + box_np[detection_i, 2] / 2)),
+        )
+
+        vis_img_np = cv2.rectangle(vis_img_np, x0y0, x1y1, color, 2)
+
+        confidence_str = f"{round(float(confidence_np[detection_i, class_id_np[detection_i]]), 2)}"
+        if x0y0[1] > 20:
+            confidence_text_pos = (x0y0[0], x0y0[1] - 10)
+        else:
+            confidence_text_pos = (x0y0[0], x1y1[1] + 30)
+
+        vis_img_np = cv2.putText(vis_img_np, confidence_str, confidence_text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+        alpha = 0.5
+
+        print(f"vis_img_np: {vis_img_np.shape}")
+        print(f"mask_np: {mask_np.shape}")
+        vis_img_np[mask_np[detection_i]] = alpha * np.array(color) + (1 - alpha) * (vis_img_np[mask_np[detection_i]])
+
+    return vis_img_np
 
 if __name__ == "__main__":
     prototype_fig = plot_prototype(torch.rand((52, 32, 32)))

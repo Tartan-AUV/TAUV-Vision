@@ -126,4 +126,5 @@ class ClassConfigSet:
     def load(cls, path: pathlib.Path):
         with open(path, "r") as fp:
             data = json.load(fp)
-        return cls(**data)
+
+        return cls([ClassConfig(d["id"], d["index"]) for d in data["configs"]])

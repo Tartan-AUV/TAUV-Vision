@@ -24,7 +24,7 @@ from tauv_vision.yolact.model.config import ModelConfig, ClassConfigSet
 from tauv_vision.yolact.model.boxes import box_decode
 from tauv_vision.yolact.model.masks import assemble_mask
 from tauv_vision.yolact.model.nms import nms
-from tauv_vision.yolact.utils.plot import plot_detection
+from tauv_vision.utils.plot import plot_prediction_np
 
 
 def fig_to_np(fig):
@@ -51,13 +51,13 @@ class YolactNode:
         self._device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._model: Yolact = Yolact(self._model_config).to(self._device)
 
-        rospy.logdebug(f"Loading weights from {self._weight_path}...")
+        rospy.loginfo(f"Loading weights from {self._weight_path}...")
         self._model.load_state_dict(torch.load(self._weight_path, map_location=self._device))
-        rospy.logdebug("Done loading weights.")
+        rospy.loginfo("Done loading weights.")
 
-        rospy.logdebug(f"Dry-running model...")
+        rospy.loginfo(f"Dry-running model...")
         self._model(torch.rand(1, 3, self._model_config.in_h, self._model_config.in_w, device=self._device))
-        rospy.logdebug(f"Done dry-running model.")
+        rospy.loginfo(f"Done dry-running model.")
 
         self._camera_infos: Dict[str, CameraInfo] = {}
         self._intrinsics: Dict[str, CameraIntrinsics] = {}
@@ -72,34 +72,34 @@ class YolactNode:
 
             synchronizer = ApproximateTimeSynchronizer(
                 [color_sub, depth_sub],
-                queue_size=10,
+                queue_size=2,
                 slop=0.5,
             )
             synchronizer.registerCallback(partial(self._handle_imgs, frame_id=frame_id))
 
             self._synchronizers[frame_id] = synchronizer
 
-        rospy.logdebug("Set up subscribers")
+        rospy.loginfo("Set up subscribers")
 
         self._detections_image_pub: rospy.Publisher = rospy.Publisher("detections_image", Image, queue_size=10)
 
         self._detections_pub: rospy.Publisher = \
             rospy.Publisher("global_map/feature_detections", FeatureDetections, queue_size=10)
 
-        rospy.logdebug("Set up publishers")
+        rospy.loginfo("Set up publishers")
 
     def start(self):
         rospy.spin()
 
     def _handle_imgs(self, color_msg: Image, depth_msg: Image, frame_id: str):
-        rospy.logdebug("Yolact got images")
+        rospy.loginfo("Yolact got images")
 
         color_np = self._cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         depth = self._cv_bridge.imgmsg_to_cv2(depth_msg, desired_encoding="mono16")
         depth = np.where(depth == 0, np.nan, depth)
         depth = depth.astype(float) / 1000
 
-        rospy.logdebug("Preprocessing image...")
+        rospy.loginfo("Preprocessing image...")
         start_time = time.time()
 
         img_raw = T.ToTensor()(color_np)
@@ -107,17 +107,17 @@ class YolactNode:
         img = T.Normalize(mean=self._model_config.img_mean, std=self._model_config.img_stddev)(img).to(self._device)
 
         end_time = time.time()
-        rospy.logdebug(f"Preprocessed image in {end_time - start_time} s")
+        rospy.loginfo(f"Preprocessed image in {end_time - start_time} s")
 
-        rospy.logdebug("Calculating prediction...")
+        rospy.loginfo("Calculating prediction...")
         start_time = time.time()
 
         prediction = self._model(img)
 
         end_time = time.time()
-        rospy.logdebug(f"Got prediction in {end_time - start_time} s")
+        rospy.loginfo(f"Got prediction in {end_time - start_time} s")
 
-        rospy.logdebug("Processing prediction...")
+        rospy.loginfo("Processing prediction...")
         start_time = time.time()
 
         classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
@@ -125,34 +125,36 @@ class YolactNode:
         classification_max = torch.argmax(classification[0], dim=-1).squeeze(0)
         detections = nms(classification, box, self._topk, self._iou_threshold, self._confidence_threshold)
         if len(detections) == 0:
-            rospy.logdebug("No detections")
+            rospy.loginfo("No detections")
             return
         mask = assemble_mask(mask_prototype[0], mask_coeff[0, detections], box[0, detections])
-        mask = F.interpolate(mask.unsqueeze(0), (img_raw.size(1), img_raw.size(2))).squeeze(0)
 
         end_time = time.time()
-        rospy.logdebug(f"Processed prediction in {end_time - start_time} s")
+        rospy.loginfo(f"Processed prediction in {end_time - start_time} s")
 
-        # TODO: Do the better plotting from evaluate_batch.py
-        detection_fig = plot_detection(
-            img_raw,
-            classification_max[detections],
-            box[0, detections],
-            None,
-            None,
-            None
+        confidence_np = F.softmax(classification[0, detections], dim=-1).detach().cpu().numpy()
+        class_id_np = np.argmax(confidence_np, axis=-1)
+        box_np = box[0, detections].detach().cpu().numpy()
+        mask = F.interpolate(mask.unsqueeze(0), (color_np.shape[0], color_np.shape[1]), mode="bilinear").squeeze(0)
+        mask_np = (mask > 0.5).detach().cpu().numpy()
+
+        rospy.loginfo(f"Attempting to plot")
+
+        vis_img_np = plot_prediction_np(
+            img_np=color_np,
+            class_id_np=class_id_np,
+            confidence_np=confidence_np,
+            box_np=box_np,
+            mask_np=mask_np,
         )
 
-        detection_fig_np = fig_to_np(detection_fig)
-        plt.close(detection_fig)
-
-        detection_fig_msg = self._cv_bridge.cv2_to_imgmsg(detection_fig_np, encoding="rgba8")
+        detection_fig_msg = self._cv_bridge.cv2_to_imgmsg(np.flip(vis_img_np, axis=-1), encoding="bgr8")
         self._detections_image_pub.publish(detection_fig_msg)
 
         world_frame = f"{self._tf_namespace}/odom"
         camera_frame = f"{self._tf_namespace}/{frame_id}"
 
-        rospy.logdebug(f"{world_frame} to {camera_frame}")
+        rospy.loginfo(f"{world_frame} to {camera_frame}")
 
         world_t_cam = None
         while world_t_cam is None:
@@ -162,7 +164,7 @@ class YolactNode:
                 rospy.logwarn(e)
                 rospy.logwarn("Failed to get transform")
 
-        rospy.logdebug("Got transforms")
+        rospy.loginfo("Got transforms")
 
         detection_array_msg = FeatureDetections()
         detection_array_msg.detector_tag = "yolact"
@@ -209,7 +211,7 @@ class YolactNode:
 
             detection_array_msg.detections.append(detection_msg)
 
-        rospy.logdebug("Publishing detections")
+        rospy.loginfo("Publishing detections")
 
         self._detections_pub.publish(detection_array_msg)
 
