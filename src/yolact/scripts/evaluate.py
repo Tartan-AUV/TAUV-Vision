@@ -28,16 +28,16 @@ config = Config(
     n_fpn_downsample_layers=2,
     anchor_scales=(24, 48, 96, 192, 384),
     anchor_aspect_ratios=(1 / 2, 1, 2),
-    iou_pos_threshold=0.5,
-    iou_neg_threshold=0.4,
+    iou_pos_threshold=0.4,
+    iou_neg_threshold=0.3,
     negative_example_ratio=3,
 )
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
 
-img_path = pathlib.Path("~/Documents/TAUV-Vision/img/1699209503103858139.png").expanduser()
-weights_path = pathlib.Path("~/Documents/TAUV-Vision/weights/37.pt").expanduser()
+img_path = pathlib.Path("/Volumes/Storage/bags/2023-09-05/all/1699208876839857139.png").expanduser()
+weights_path = pathlib.Path("~/Documents/TAUV-Vision/weights/wandering-mountain-193_30.pt").expanduser()
 
 def main():
     model = Yolact(config)
@@ -47,7 +47,7 @@ def main():
 
     img_pil = Image.open(img_path).convert("RGB")
     img_np = np.array(img_pil)
-    img_np = np.flip(img_np, -1)
+    # img_np = np.flip(img_np, -1)
 
     val_transform = A.Compose(
         [

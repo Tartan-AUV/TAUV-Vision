@@ -80,6 +80,10 @@ def run(images_dir: pathlib.Path, raw_labels_dir: pathlib.Path, dataset_dir: pat
 
         for annotation_data in data:
             # id = annotation_data["annotation_id"]
+
+            if "bounding_box" not in annotation_data:
+                continue
+
             image_name_raw = annotation_data["image"]
             img_name = re.search(r"\/([^\/]+\.png)", image_name_raw).group(1)
             id = img_name.split(".")[0]
@@ -136,6 +140,7 @@ def run(images_dir: pathlib.Path, raw_labels_dir: pathlib.Path, dataset_dir: pat
                 valid=valid,
                 classifications=classifications,
                 bounding_boxes=bounding_boxes,
+                img_valid=torch.ones_like(img, dtype=torch.bool)
             )
 
             sample.save(dataset_dir, id)

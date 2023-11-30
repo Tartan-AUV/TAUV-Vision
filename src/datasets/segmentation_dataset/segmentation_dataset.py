@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from yolact.model.boxes import box_xy_swap
+import random
 
 
 class SegmentationDatasetSet(Enum):
@@ -27,6 +28,7 @@ class SegmentationSample:
     valid: torch.Tensor
     classifications: torch.Tensor
     bounding_boxes: torch.Tensor
+    img_valid: torch.Tensor
 
     def save(self, set_path: pathlib.Path, id: str):
         json_path = (set_path / id).with_suffix(".json")
@@ -108,12 +110,14 @@ class SegmentationSample:
             img_np = transformed["image"]
             seg_np = transformed["mask"]
             bounding_boxes_np = transformed["bboxes"]
+            classifications_np = transformed["classifications"]
 
         n_detections = len(bounding_boxes_np)
 
         img = T.ToTensor()(img_np)
         seg = T.ToTensor()(seg_np)[0]
         seg = (255 * seg).to(torch.uint8)
+        img_valid = seg != 254
         classifications = torch.Tensor(classifications_np).to(torch.long)
 
         if n_detections == 0:
@@ -127,6 +131,7 @@ class SegmentationSample:
                 valid=valid,
                 classifications=classifications,
                 bounding_boxes=bounding_boxes,
+                img_valid=img_valid,
             )
 
             return sample
@@ -139,6 +144,7 @@ class SegmentationSample:
             valid=valid,
             classifications=classifications,
             bounding_boxes=bounding_boxes,
+            img_valid=img_valid
         )
 
         return sample
@@ -163,6 +169,7 @@ class SegmentationDataset(Dataset):
             raise ValueError(f"No such directory: {self._set_path}")
 
         self._ids: [str] = SegmentationDataset.get_ids(self._set_path)
+        random.shuffle(self._ids)
 
     def __len__(self) -> int:
         return len(self._ids)

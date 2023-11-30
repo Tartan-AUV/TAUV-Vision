@@ -13,6 +13,7 @@ from transform_client import TransformClient
 import torch.nn.functional as F
 import cv2
 import io
+import time
 import matplotlib.pyplot as plt
 
 from tauv_util.cameras import CameraIntrinsics
@@ -23,28 +24,31 @@ from yolact.model.model import Yolact
 from yolact.model.config import Config
 from yolact.model.boxes import box_decode
 from yolact.model.masks import assemble_mask
-from yolact.model.nms import class_nms
+from yolact.model.nms import nms
 from yolact.utils.plot import plot_detection
 
 
 config = Config(
-    in_w=1280,
-    in_h=720,
-    feature_depth=256,
-    n_classes=3,
-    n_prototype_masks=32,
+    in_w=640,
+    in_h=360,
+    feature_depth=64,
+    n_classes=2,
+    n_prototype_masks=16,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
     n_prediction_head_layers=1,
+    n_classification_layers=0,
+    n_box_layers=0,
+    n_mask_layers=0,
     n_fpn_downsample_layers=2,
     anchor_scales=(24, 48, 96, 192, 384),
-    anchor_aspect_ratios=(1 / 2, 1, 2),
-    iou_pos_threshold=0.5,
-    iou_neg_threshold=0.4,
+    anchor_aspect_ratios=(1,),
+    iou_pos_threshold=0.4,
+    iou_neg_threshold=0.3,
     negative_example_ratio=3,
 )
 
-classification_names = {0: "torpedo_22", 1: "torpedo_22_circle", 2: "torpedo_22_trapezoid"}
+classification_names = {0: "torpedo_22_bootlegger_circle", 1: "torpedo_22_bootlegger_trapezoid"}
 
 img_mean = (0.485, 0.456, 0.406)
 img_stddev = (0.229, 0.224, 0.225)
@@ -71,9 +75,13 @@ class Wrapper:
         self._device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._model: Yolact = Yolact(config).to(self._device)
 
-        rospy.loginfo(f"Loading weights from {self._weight_path}...")
+        rospy.logdebug(f"Loading weights from {self._weight_path}...")
         self._model.load_state_dict(torch.load(self._weight_path, map_location=self._device))
-        rospy.loginfo("Done loading weights.")
+        rospy.logdebug("Done loading weights.")
+
+        rospy.logdebug(f"Dry-running model...")
+        self._model(torch.rand(1, 3, config.in_h, config.in_w, device=self._device))
+        rospy.logdebug(f"Done dry-running model.")
 
         self._camera_infos: Dict[str, CameraInfo] = {}
         self._intrinsics: Dict[str, CameraIntrinsics] = {}
@@ -95,43 +103,59 @@ class Wrapper:
 
             self._synchronizers[frame_id] = synchronizer
 
-        rospy.loginfo("Set up subscribers")
+        rospy.logdebug("Set up subscribers")
 
         self._detections_image_pub: rospy.Publisher = rospy.Publisher("detections_image", Image, queue_size=10)
 
         self._detections_pub: rospy.Publisher = \
             rospy.Publisher("global_map/feature_detections", FeatureDetections, queue_size=10)
 
-        rospy.loginfo("Set up publishers")
+        rospy.logdebug("Set up publishers")
 
     def start(self):
         rospy.spin()
 
     def _handle_imgs(self, color_msg: Image, depth_msg: Image, frame_id: str):
-        rospy.loginfo("Yolact got images")
+        rospy.logdebug("Yolact got images")
 
         color_np = self._cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         depth = self._cv_bridge.imgmsg_to_cv2(depth_msg, desired_encoding="mono16")
+        depth = np.where(depth == 0, np.nan, depth)
         depth = depth.astype(float) / 1000
 
-        img_raw = T.ToTensor()(color_np)
-        img = T.Normalize(mean=img_mean, std=img_stddev)(img_raw.unsqueeze(0)).to(self._device)
+        rospy.logdebug("Preprocessing image...")
+        start_time = time.time()
 
-        rospy.loginfo("Calculating prediction...")
+        img_raw = T.ToTensor()(color_np)
+        img = T.Resize((360, 640))(img_raw.unsqueeze(0))
+        img = T.Normalize(mean=img_mean, std=img_stddev)(img).to(self._device)
+
+        end_time = time.time()
+        rospy.logdebug(f"Preprocessed image in {end_time - start_time} s")
+
+        rospy.logdebug("Calculating prediction...")
+        start_time = time.time()
 
         prediction = self._model(img)
 
-        rospy.loginfo("Got prediction")
+        end_time = time.time()
+        rospy.logdebug(f"Got prediction in {end_time - start_time} s")
+
+        rospy.logdebug("Processing prediction...")
+        start_time = time.time()
 
         classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
         box = box_decode(box_encoding, anchor)
         classification_max = torch.argmax(classification[0], dim=-1).squeeze(0)
-        detections = class_nms(classification, box)
+        detections = nms(classification, box, self._topk, self._iou_threshold, self._confidence_threshold)
         if len(detections) == 0:
-            rospy.loginfo("No detections")
+            rospy.logdebug("No detections")
             return
         mask = assemble_mask(mask_prototype[0], mask_coeff[0, detections], box[0, detections])
-        mask = F.interpolate(mask.unsqueeze(0), (img.size(2), img.size(3))).squeeze(0)
+        mask = F.interpolate(mask.unsqueeze(0), (img_raw.size(1), img_raw.size(2))).squeeze(0)
+
+        end_time = time.time()
+        rospy.logdebug(f"Processed prediction in {end_time - start_time} s")
 
         detection_fig = plot_detection(
             img_raw,
@@ -151,7 +175,7 @@ class Wrapper:
         world_frame = f"{self._tf_namespace}/odom"
         camera_frame = f"{self._tf_namespace}/{frame_id}"
 
-        rospy.loginfo(f"{world_frame} to {camera_frame}")
+        rospy.logdebug(f"{world_frame} to {camera_frame}")
 
         world_t_cam = None
         while world_t_cam is None:
@@ -161,19 +185,40 @@ class Wrapper:
                 rospy.logwarn(e)
                 rospy.logwarn("Failed to get transform")
 
-        rospy.loginfo("Got transforms")
+        rospy.logdebug("Got transforms")
 
         detection_array_msg = FeatureDetections()
         detection_array_msg.detector_tag = "yolact"
 
-        for detection_i, detection in enumerate(detections):
-            cam_t_detection = SE3()
-            world_t_detection = world_t_cam * cam_t_detection
-            classification_name = classification_names[int(classification_max[detection])]
+        intrinsics = self._intrinsics[frame_id]
 
+        # TODO: detection_i vs detection is confusing
+        for detection_i, detection in enumerate(detections):
             mask_np = mask[detection_i].detach().cpu().numpy()
+            classification_name = classification_names[int(classification_max[detection]) - 1]
+
+            e_x = float(box[0, detection, 1]) * color_np.shape[1]
+            e_y = float(box[0, detection, 0]) * color_np.shape[0]
 
             mean_depth = np.nanmean(np.where(mask_np > 0.5, depth, np.nan))
+            if np.isnan(mean_depth):
+                continue
+
+            z = mean_depth
+
+            rospy.loginfo(f"e_x: {e_x}, e_y: {e_y}, c_x: {intrinsics.c_x}, c_y: {intrinsics.c_y}")
+
+            x = (e_x - intrinsics.c_x) * (z / intrinsics.f_x)
+            y = (e_y - intrinsics.c_y) * (z / intrinsics.f_y)
+
+            R = SO3.TwoVectors(x="z", y="x")
+            t = np.array([x, y, z])
+
+            cam_t_detection = SE3.Rt(R=R, t=t)
+
+            world_t_detection = world_t_cam * cam_t_detection
+
+            # TODO: Constrain orientation to be in SO2
 
             print(f"mean depth: {mean_depth}")
 
@@ -183,12 +228,11 @@ class Wrapper:
             detection_msg.SE2 = False
             detection_msg.position = r3_to_ros_point(world_t_detection.t)
             rpy = world_t_detection.rpy()
-            rpy[0:2] = 0
             detection_msg.orientation = r3_to_ros_point(rpy)
 
             detection_array_msg.detections.append(detection_msg)
 
-        rospy.loginfo("Publishing detections")
+        rospy.logdebug("Publishing detections")
 
         self._detections_pub.publish(detection_array_msg)
 
@@ -197,6 +241,9 @@ class Wrapper:
         self._tf_namespace: str = rospy.get_param("tf_namespace")
 
         self._weight_path: str = rospy.get_param("~weight_path")
+        self._topk: int = rospy.get_param("~topk")
+        self._iou_threshold: float = rospy.get_param("~iou_threshold")
+        self._confidence_threshold: float = rospy.get_param("~confidence_threshold")
 
 
 def main():

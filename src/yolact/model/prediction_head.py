@@ -13,23 +13,55 @@ class PredictionHead(nn.Module):
 
         self._config = config
 
-        self._bottleneck = Bottleneck(config.feature_depth, config.feature_depth // 4)
-
-        self._conv = nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=1)
-        self._batchnorm = nn.BatchNorm2d(config.feature_depth)
+        self._extra_layers = nn.ModuleList([
+            Bottleneck(config.feature_depth, config.feature_depth // 4)
+            for _ in range(self._config.n_prediction_head_layers)
+        ])
+        self._extra_conv_layers = nn.ModuleList([
+            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=1)
+            for _ in range(self._config.n_prediction_head_layers)
+        ])
+        self._extra_bn_layers = nn.ModuleList([
+            nn.BatchNorm2d(config.feature_depth)
+            for _ in range(self._config.n_prediction_head_layers)
+        ])
 
         self._classification_extra_layers = nn.ModuleList([
-            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=3, stride=1, padding=1)
+            Bottleneck(config.feature_depth, config.feature_depth // 4)
+            for _ in range(self._config.n_classification_layers)
+        ])
+        self._classification_extra_conv_layers = nn.ModuleList([
+            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=1)
+            for _ in range(self._config.n_classification_layers)
+        ])
+        self._classification_extra_bn_layers = nn.ModuleList([
+            nn.BatchNorm2d(config.feature_depth)
             for _ in range(self._config.n_classification_layers)
         ])
 
         self._box_extra_layers = nn.ModuleList([
-            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=3, stride=1, padding=1)
+            Bottleneck(config.feature_depth, config.feature_depth // 4)
+            for _ in range(self._config.n_box_layers)
+        ])
+        self._box_extra_conv_layers = nn.ModuleList([
+            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=1)
+            for _ in range(self._config.n_box_layers)
+        ])
+        self._box_extra_bn_layers = nn.ModuleList([
+            nn.BatchNorm2d(config.feature_depth)
             for _ in range(self._config.n_box_layers)
         ])
 
         self._mask_extra_layers = nn.ModuleList([
-            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=3, stride=1, padding=1)
+            Bottleneck(config.feature_depth, config.feature_depth // 4)
+            for _ in range(self._config.n_mask_layers)
+        ])
+        self._mask_extra_conv_layers = nn.ModuleList([
+            nn.Conv2d(config.feature_depth, config.feature_depth, kernel_size=1)
+            for _ in range(self._config.n_mask_layers)
+        ])
+        self._mask_extra_bn_layers = nn.ModuleList([
+            nn.BatchNorm2d(config.feature_depth)
             for _ in range(self._config.n_mask_layers)
         ])
 
@@ -56,43 +88,54 @@ class PredictionHead(nn.Module):
         )
 
     def forward(self, fpn_output: torch.Tensor) -> (torch.Tensor, ...):
-        a = self._bottleneck(fpn_output)
+        x = fpn_output
 
-        b = self._conv(fpn_output)
-        b = self._batchnorm(b)
-        b = F.relu(b)
+        for i in range(len(self._extra_layers)):
+            bottleneck = self._extra_layers[i]
+            conv = self._extra_conv_layers[i]
+            bn = self._extra_bn_layers[i]
 
-        x = a + b
+            x = F.relu(conv(x) + bn(bottleneck(x)))
 
         classification = x
+        box_encoding = x
+        mask_coeff = x
 
-        for classification_layer in self._classification_extra_layers:
-            classification = classification_layer(classification)
-            classification = F.relu(classification)
+        for i in range(len(self._classification_extra_layers)):
+            bottleneck = self._classification_extra_layers[i]
+            conv = self._classification_extra_conv_layers[i]
+            bn = self._classification_extra_bn_layers[i]
+
+            classification = F.relu(conv(classification) + bn(bottleneck(classification)))
 
         classification = self._classification_layer(classification)
         classification = classification.permute(0, 2, 3, 1)
         classification = classification.reshape(classification.size(0), -1, self._config.n_classes + 1)
 
-        box_encoding = x
+        for i in range(len(self._box_extra_layers)):
+            bottleneck = self._box_extra_layers[i]
+            conv = self._box_extra_conv_layers[i]
+            bn = self._box_extra_bn_layers[i]
 
-        for box_layer in self._box_extra_layers:
-            box_encoding = box_layer(box_encoding)
-            box_encoding = F.relu(box_encoding)
+            box_encoding = F.relu(conv(box_encoding) + bn(bottleneck(box_encoding)))
 
         box_encoding = self._box_encoding_layer(box_encoding)
         box_encoding = box_encoding.permute(0, 2, 3, 1)
         box_encoding = box_encoding.reshape(box_encoding.size(0), -1, 4)
-        box_encoding[:, :, 0:2] = F.sigmoid(box_encoding[:, :, 0:2]) - 0.5
-        box_encoding[:, :, 0] /= x.size(2)
-        box_encoding[:, :, 1] /= x.size(3)
+        # box_encoding[:, :, 0:2] = F.sigmoid(box_encoding[:, :, 0:2]) - 0.5
+        # box_encoding[:, :, 0] /= x.size(2) # TODO: What does this actually do?
+        # box_encoding[:, :, 1] /= x.size(3)
+        # box_encoding[:, :, 2:4] = 2 * (F.sigmoid(box_encoding[:, :, 2:4]) - 0.5)
+        # box_encoding[:, :, 0:2] = F.sigmoid(box_encoding[:, :, 0:2]) - 0.5
 
-        mask_coeff = x
-        for mask_layer in self._mask_extra_layers:
-            mask_coeff = mask_layer(mask_coeff)
-            mask_coeff = F.relu(mask_coeff)
+        for i in range(len(self._mask_extra_layers)):
+            bottleneck = self._mask_extra_layers[i]
+            conv = self._mask_extra_conv_layers[i]
+            bn = self._mask_extra_bn_layers[i]
 
-        mask_coeff = self._mask_coeff_layer(x)
+            mask_coeff = F.relu(conv(mask_coeff) + bn(bottleneck(mask_coeff)))
+
+        mask_coeff = self._mask_coeff_layer(mask_coeff)
         mask_coeff = mask_coeff.permute(0, 2, 3, 1)
         mask_coeff = mask_coeff.reshape(mask_coeff.size(0), -1, self._config.n_prototype_masks)
         mask_coeff = F.tanh(mask_coeff)
