@@ -11,6 +11,9 @@ SCENE_PRIM_PREFIX = "/Replicator/Ref_Xform/Ref"
 with rep.new_layer():
     scene = rep.create.from_usd("/home/theo/Documents/yolo_pose/models/underwater_scene_1/underwater_scene_1.usd")
 
+    # Don't have scene create the objects.
+    # Create the objects at runtime using a choice of usd paths
+
     camera = rep.create.camera(
         position=(0, 0, 0),
         rotation=(0, 0, 0),
@@ -34,6 +37,11 @@ with rep.new_layer():
                 "/home/theo/Documents/dosch_design_underwater_hdri/spherical_map/Underwater-18_XXL.hdr",
                 "/home/theo/Documents/dosch_design_underwater_hdri/spherical_map/Underwater-19_XXL.hdr",
                 "/home/theo/Documents/dosch_design_underwater_hdri/spherical_map/Underwater-20_XXL.hdr",
+                "/home/theo/Documents/auto_service_4k.exr",
+                "/home/theo/Documents/kart_club_4k.exr",
+                "/home/theo/Documents/machine_shop_01_4k.exr",
+                "/home/theo/Documents/school_quad_4k.exr",
+                "/home/theo/Documents/whale_skeleton_4k.exr",
             ]))
 
             rep.modify.attribute("intensity", rep.distribution.uniform(200, 250))
@@ -97,7 +105,7 @@ with rep.new_layer():
                 render_product=render_product,
                 horizontal_location=rep.distribution.uniform(-1, 1),
                 vertical_location=rep.distribution.uniform(-1, 1),
-                distance=rep.distribution.uniform(300, 1000),
+                distance=rep.distribution.uniform(600, 1000),
             )
 
             rep.modify.pose(
@@ -113,9 +121,14 @@ with rep.new_layer():
     rep.randomizer.register(randomize_distractors)
 
     def randomize_objects():
-        print("getting objects")
-        objects = rep.get.prims(semantics=[('type', 'object')])
-        print("got objects")
+        print("creating objects")
+        objects = rep.randomizer.instantiate([
+            "/home/theo/Documents/yolo_pose/models/buoy_23/usd/buoy_23_1_final.usd",
+            "/home/theo/Documents/yolo_pose/models/buoy_23/usd/buoy_23_2_final.usd",
+            "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_gman_final.usd",
+            "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final.usd",
+        ], size=1, mode="point_instance", use_cache=False)
+        print("created objects")
 
         with objects:
             rep.modify.pose_camera_relative(
@@ -123,14 +136,12 @@ with rep.new_layer():
                 render_product=render_product,
                 horizontal_location=rep.distribution.uniform(-0.5, 0.5),
                 vertical_location=rep.distribution.uniform(-0.5, 0.5),
-                distance=rep.distribution.uniform(100, 1000),
+                distance=rep.distribution.uniform(200, 500),
             )
 
             rep.modify.pose(
-                rotation=rep.distribution.uniform((-30, -30, -180), (30, 30, 180)),
+                rotation=rep.distribution.uniform((-30, -30, -30), (30, 30, 30)),
             )
-
-            rep.modify.visibility(rep.distribution.choice([True, False], weights=[0.1, 0.9]))
 
         print("done randomizing objects")
 
@@ -147,11 +158,12 @@ with rep.new_layer():
     bbox3d_annot = rep.AnnotatorRegistry.get_annotator("bounding_box_3d")
     bbox3d_annot.attach([render_product])
 
-    instance_seg_annot = rep.AnnotatorRegistry.get_annotator("instance_segmentation", init_params={"colorize": True})
+    instance_seg_annot = rep.AnnotatorRegistry.get_annotator("instance_segmentation_fast")
     instance_seg_annot.attach([render_product])
 
     basic_writer = rep.BasicWriter(
         output_dir=f"/home/theo/Documents/replicator_out/",
+        colorize_instance_segmentation=False,
     )
 
     with rep.trigger.on_frame():

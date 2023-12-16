@@ -89,6 +89,8 @@ class TrainConfig:
 
     min_visibility: float
 
+    n_workers: int
+
     def save(self, path: pathlib.Path):
         with open(path, "w") as fp:
             json.dump(asdict(self), fp, indent=2)

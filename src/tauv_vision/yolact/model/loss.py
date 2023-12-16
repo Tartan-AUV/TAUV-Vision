@@ -83,13 +83,12 @@ def loss(prediction: (torch.Tensor, ...), truth: (torch.Tensor, ...), config: Mo
             match_mask = F.sigmoid(match_mask)
             match_mask = torch.clamp(match_mask, min=1e-4)
 
-            with torch.no_grad():
-                truth_match_mask = (truth_seg_map[batch_i] == match_index[batch_i, match_i]).float()
-                truth_match_mask_resized = F.interpolate(
-                    truth_match_mask.unsqueeze(0).unsqueeze(0),
-                    match_mask.size(),
-                    mode="bilinear",
-                ).squeeze(0).squeeze(0)
+            truth_match_mask = (truth_seg_map[batch_i] == match_index[batch_i, match_i]).float()
+            truth_match_mask_resized = F.interpolate(
+                truth_match_mask.unsqueeze(0).unsqueeze(0),
+                match_mask.size(),
+                mode="bilinear",
+            ).squeeze(0).squeeze(0)
 
             if truth_match_mask_resized.sum() == 0:
                 continue

@@ -15,6 +15,9 @@ class Resnet101Backbone(nn.Module):
 
         resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
+        # self._feature_extractor = models.feature_extraction.create_feature_extractor(resnet, return_nodes=[
+        #     "layer2.3.bn2", "layer3.22.bn2", "layer4.2.bn2",
+        # ])
         self._feature_extractor = models.feature_extraction.create_feature_extractor(resnet, return_nodes=[
             "layer2.1.bn2", "layer3.1.bn2", "layer4.1.bn2",
         ])

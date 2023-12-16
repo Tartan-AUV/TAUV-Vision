@@ -28,9 +28,9 @@ from tauv_vision.utils.plot import save_plot, plot_prototype, plot_mask, plot_de
 model_config = ModelConfig(
     in_w=640,
     in_h=360,
-    feature_depth=64,
-    n_classes=2,
-    n_prototype_masks=16,
+    feature_depth=256,
+    n_classes=7,
+    n_prototype_masks=8,
     n_masknet_layers_pre_upsample=1,
     n_masknet_layers_post_upsample=1,
     n_prediction_head_layers=1,
@@ -54,11 +54,11 @@ train_config = TrainConfig(
     weight_decay=0,
     grad_max_norm=1e0,
     n_epochs=200,
-    batch_size=96,
+    batch_size=24,
     epoch_n_batches=100,
     weight_save_interval=1,
     gradient_save_frequency=1000,
-    channel_shuffle_p=1,
+    channel_shuffle_p=0,
     color_jitter_p=1,
     color_jitter_brightness=0.2,
     color_jitter_contrast=0.2,
@@ -71,31 +71,52 @@ train_config = TrainConfig(
     blur_limit=(3, 7),
     blur_p=0.5,
     ssr_p=1,
-    ssr_shift_limit=(-0.25, 0.25),
+    ssr_shift_limit=(-0.1, 0.1),
     ssr_scale_limit=(-0.1, 0.1),
     ssr_rotate_limit=(-30, 30),
     perspective_p=1,
     perspective_scale_limit=(0.0, 0.25),
-    min_visibility=0.1,
+    min_visibility=0.0,
+    n_workers=4,
 )
 
 class_config = ClassConfigSet([
     ClassConfig(
-        id="torpedo_22_bootlegger_circle",
+        id="torpedo_22_circle",
         index=1,
     ),
     ClassConfig(
-        id="torpedo_22_bootlegger_trapezoid",
+        id="torpedo_22_trapezoid",
         index=2,
+    ),
+    ClassConfig(
+        id="torpedo_22_star",
+        index=3,
+    ),
+    ClassConfig(
+        id="buoy_23_abydos_1",
+        index=4,
+    ),
+    ClassConfig(
+        id="buoy_23_abydos_2",
+        index=5,
+    ),
+    ClassConfig(
+        id="buoy_23_earth_1",
+        index=6,
+    ),
+    ClassConfig(
+        id="buoy_23_earth_2",
+        index=7,
     ),
 ])
 
 train_dataset_roots = [
     # pathlib.Path("~/Documents/2023-11-05").expanduser(),
     # pathlib.Path("~/Documents/torpedo_22_2_small").expanduser(),
-    pathlib.Path("~/Documents/torpedo_22_1_small").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets/watch-open-reason").expanduser(),
 ]
-val_dataset_root = pathlib.Path("~/Documents/2023-11-05").expanduser()
+val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/watch-open-reason").expanduser()
 results_root = pathlib.Path("~/Documents/yolact_runs").expanduser()
 
 
@@ -360,6 +381,8 @@ def main():
         },
     )
 
+    class_ids_to_indices = {c.id: c.index for c in class_config.configs}
+
     model_config_path = save_dir / f"{run.name}_model_config.json"
     train_config_path = save_dir / f"{run.name}_train_config.json"
     class_config_path = save_dir / f"{run.name}_class_config.json"
@@ -440,18 +463,18 @@ def main():
     )
 
     train_datasets = [
-        SegmentationDataset(dataset_root, SegmentationDatasetSet.TRAIN, transform=train_transform)
+        SegmentationDataset(dataset_root, SegmentationDatasetSet.TRAIN, class_ids_to_indices, transform=train_transform)
         for dataset_root in train_dataset_roots
     ]
     train_dataset = ConcatDataset(train_datasets)
-    val_dataset = SegmentationDataset(val_dataset_root, SegmentationDatasetSet.VALIDATION, transform=val_transform)
+    val_dataset = SegmentationDataset(val_dataset_root, SegmentationDatasetSet.VALIDATION, class_ids_to_indices, transform=val_transform)
 
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=train_config.batch_size,
         collate_fn=collate_samples,
         shuffle=True,
-        num_workers=10,
+        num_workers=train_config.n_workers,
     )
 
     wandb.watch(model, log="all", log_freq=train_config.gradient_save_frequency)
@@ -461,7 +484,7 @@ def main():
         batch_size=train_config.batch_size,
         collate_fn=collate_samples,
         shuffle=False,
-        num_workers=10,
+        num_workers=train_config.n_workers,
     )
 
     best_val_loss = float("inf")
