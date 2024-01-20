@@ -51,9 +51,13 @@ class YolactNode:
         self._device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._model: Yolact = Yolact(self._model_config).to(self._device)
 
-        rospy.loginfo(f"Loading weights from {self._weight_path}...")
+        rospy.logdebug(f"Loading weights from {self._weight_path}...")
         self._model.load_state_dict(torch.load(self._weight_path, map_location=self._device))
-        rospy.loginfo("Done loading weights.")
+        rospy.logdebug("Done loading weights.")
+
+        rospy.logdebug(f"Dry-running model...")
+        self._model(torch.rand(1, 3, self._model_config.in_h, self._model_config.in_w, device=self._device))
+        rospy.logdebug(f"Done dry-running model.")
 
         rospy.loginfo(f"Dry-running model...")
         self._model(torch.rand(1, 3, self._model_config.in_h, self._model_config.in_w, device=self._device))
@@ -79,47 +83,45 @@ class YolactNode:
 
             self._synchronizers[frame_id] = synchronizer
 
-        rospy.loginfo("Set up subscribers")
+        rospy.logdebug("Set up subscribers")
 
         self._detections_image_pub: rospy.Publisher = rospy.Publisher("detections_image", Image, queue_size=10)
 
         self._detections_pub: rospy.Publisher = \
             rospy.Publisher("global_map/feature_detections", FeatureDetections, queue_size=10)
 
-        rospy.loginfo("Set up publishers")
+        rospy.logdebug("Set up publishers")
 
     def start(self):
         rospy.spin()
 
     def _handle_imgs(self, color_msg: Image, depth_msg: Image, frame_id: str):
-        rospy.loginfo("Yolact got images")
+        rospy.logdebug("Yolact got images")
 
         color_np = self._cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         depth = self._cv_bridge.imgmsg_to_cv2(depth_msg, desired_encoding="mono16")
         depth = np.where(depth == 0, np.nan, depth)
         depth = depth.astype(float) / 1000
 
-        rospy.loginfo("Preprocessing image...")
+        rospy.logdebug("Preprocessing image...")
         start_time = time.time()
 
         img_raw = T.ToTensor()(color_np)
-        # img = T.Resize((self._model_config.in_h, self._model_config.in_w))(img_raw.unsqueeze(0))
-        print(img_raw.size())
-        img = img_raw.unsqueeze(0)
+        img = T.Resize((self._model_config.in_h, self._model_config.in_w))(img_raw.unsqueeze(0))
         img = T.Normalize(mean=self._model_config.img_mean, std=self._model_config.img_stddev)(img).to(self._device)
 
         end_time = time.time()
-        rospy.loginfo(f"Preprocessed image in {end_time - start_time} s")
+        rospy.logdebug(f"Preprocessed image in {end_time - start_time} s")
 
-        rospy.loginfo("Calculating prediction...")
+        rospy.logdebug("Calculating prediction...")
         start_time = time.time()
 
         prediction = self._model(img)
 
         end_time = time.time()
-        rospy.loginfo(f"Got prediction in {end_time - start_time} s")
+        rospy.logdebug(f"Got prediction in {end_time - start_time} s")
 
-        rospy.loginfo("Processing prediction...")
+        rospy.logdebug("Processing prediction...")
         start_time = time.time()
 
         classification, box_encoding, mask_coeff, anchor, mask_prototype = prediction
@@ -127,20 +129,18 @@ class YolactNode:
         classification_max = torch.argmax(classification[0], dim=-1).squeeze(0)
         detections = nms(classification, box, self._topk, self._iou_threshold, self._confidence_threshold)
         if len(detections) == 0:
-            rospy.loginfo("No detections")
+            rospy.logdebug("No detections")
             return
         mask = assemble_mask(mask_prototype[0], mask_coeff[0, detections], box[0, detections])
+        mask = F.interpolate(mask.unsqueeze(0), (img_raw.size(1), img_raw.size(2))).squeeze(0)
 
         end_time = time.time()
-        rospy.loginfo(f"Processed prediction in {end_time - start_time} s")
-
+        rospy.logdebug(f"Processed prediction in {end_time - start_time} s")
         confidence_np = F.softmax(classification[0, detections], dim=-1).detach().cpu().numpy()
         class_id_np = np.argmax(confidence_np, axis=-1)
         box_np = box[0, detections].detach().cpu().numpy()
-        mask = F.interpolate(mask.unsqueeze(0), (color_np.shape[0], color_np.shape[1]), mode="bilinear").squeeze(0)
-        mask_np = (mask > 0.5).detach().cpu().numpy()
 
-        rospy.loginfo(f"Attempting to plot")
+        mask_np = mask.detach().cpu().numpy()
 
         vis_img_np = plot_prediction_np(
             img_np=color_np,
@@ -156,7 +156,7 @@ class YolactNode:
         world_frame = f"{self._tf_namespace}/odom"
         camera_frame = f"{self._tf_namespace}/{frame_id}"
 
-        rospy.loginfo(f"{world_frame} to {camera_frame}")
+        rospy.logdebug(f"{world_frame} to {camera_frame}")
 
         world_t_cam = None
         while world_t_cam is None:
@@ -166,7 +166,7 @@ class YolactNode:
                 rospy.logwarn(e)
                 rospy.logwarn("Failed to get transform")
 
-        rospy.loginfo("Got transforms")
+        rospy.logdebug("Got transforms")
 
         detection_array_msg = FeatureDetections()
         detection_array_msg.detector_tag = "yolact"
@@ -213,7 +213,7 @@ class YolactNode:
 
             detection_array_msg.detections.append(detection_msg)
 
-        rospy.loginfo("Publishing detections")
+        rospy.logdebug("Publishing detections")
 
         self._detections_pub.publish(detection_array_msg)
 
