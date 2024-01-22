@@ -3,7 +3,7 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torchvision.ops import DeformConv2d
 
 class ResidualBlock(nn.Module):
 
@@ -28,21 +28,16 @@ class ResidualBlock(nn.Module):
 		)
 		self.bn2 = nn.BatchNorm2d(out_channels)
 
-		self.downsample_residual = nn.MaxPool2d(
-			kernel_size=stride,
-			stride=stride,
-		)
 		self.conv_residual = nn.Conv2d(
 			in_channels=in_channels,
 			out_channels=out_channels,
 			kernel_size=1,
-			stride=1,
+			stride=stride,
 		)
 		self.bn_residual = nn.BatchNorm2d(out_channels)
 
 	def forward(self, x):
-		residual = self.downsample_residual(x)
-		residual = self.conv_residual(residual)
+		residual = self.conv_residual(x)
 		residual = self.bn_residual(residual)
 
 		y = self.conv1(x)
@@ -56,6 +51,9 @@ class ResidualBlock(nn.Module):
 
 		return y
 
+
+# When it's time for deform conv stuff, use MMCV package
+# https://github.com/open-mmlab/mmcv/blob/main/mmcv/ops/csrc/pytorch/deform_conv.cpp
 
 class Root(nn.Module):
 
@@ -154,6 +152,12 @@ class DLADown(nn.Module):
 			nn.ReLU(),
 		)
 
+		self.block_layer = ResidualBlock(
+			in_channels=channels[0],
+			out_channels=channels[0],
+			stride=2,
+		)
+
 		tree_layers = []
 
 		for tree_layer_i in range(len(heights)):
@@ -172,6 +176,7 @@ class DLADown(nn.Module):
 
 	def forward(self, img: torch.Tensor) -> List[torch.Tensor]:
 		x = self.projection_layer(img)
+		x = self.block_layer(x)
 
 		y = [x]
 
@@ -182,24 +187,114 @@ class DLADown(nn.Module):
 		return y
 
 
-class DLAUp(nn.Module):
-	def __init__(self):
+class IDAUp(nn.Module):
+
+	def __init__(self, feature_channels: List[int], scales: List[int]):
 		super().__init__()
 
-	def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
-		pass
+		projection_layers = []
+		output_layers = []
+		upsample_layers = []
+
+		for feature_i in range(1, len(feature_channels)):
+			projection_layer = nn.Conv2d(
+				in_channels=feature_channels[feature_i - 1],
+				out_channels=feature_channels[feature_i],
+				kernel_size=3,
+				padding=1,
+				stride=1,
+			)
+
+			output_layer = nn.Conv2d(
+				in_channels=feature_channels[feature_i],
+				out_channels=feature_channels[feature_i],
+				kernel_size=3,
+				padding=1,
+				stride=1,
+			)
+
+			upsample_layer = nn.ConvTranspose2d(
+				in_channels=feature_channels[feature_i],
+				out_channels=feature_channels[feature_i],
+				kernel_size=scales[feature_i - 1],
+				stride=scales[feature_i - 1],
+			)
+
+			projection_layers.append(projection_layer)
+			output_layers.append(output_layer)
+			upsample_layers.append(upsample_layer)
+
+		self.projection_layers = nn.ModuleList(projection_layers)
+		self.output_layers = nn.ModuleList(output_layers)
+		self.upsample_layers = nn.ModuleList(upsample_layers)
+
+	def forward(self, features: List[torch.Tensor], start_i: int, reverse: bool):
+		# for i in range(len(features) - 1, start_i - 1, -1):
+		for i in range(len(features) - start_i):
+			if reverse:
+				feature_i = len(features) - 1 - i
+			else:
+				feature_i = start_i + i
+
+			layer_i = len(features) - start_i - 1 - i if reverse else i
+
+			project = self.projection_layers[layer_i]
+			output = self.output_layers[layer_i]
+			upsample = self.upsample_layers[layer_i]
+
+			features[feature_i] = output(upsample(features[feature_i]) + project(features[feature_i - 1]))
+
+
+class MultiIDAUp(nn.Module):
+
+	def __init__(self, channels: List[int]):
+		super().__init__()
+
+		ida_up_layers = []
+
+		for i in range(1, len(channels)):
+			ida_up_layer = IDAUp(
+				feature_channels=channels[i - 1:],
+				scales=[2 for _ in range(len(channels[i:]))],
+			)
+
+			ida_up_layers.append(ida_up_layer)
+
+		self.ida_up_layers = nn.ModuleList(ida_up_layers)
+
+	def forward(self, features: List[torch.Tensor]) -> List[torch.Tensor]:
+		out = [features[-1]] # Copy lowest-size feature directly
+
+		for i in range(len(features) - 1):
+			self.ida_up_layers[i](features, i + 1, reverse=True)
+			out.append(features[-1])
+
+		return list(reversed(out))
 
 
 def main():
-	img = torch.rand((2, 3, 360, 640))
+	img = torch.rand((2, 3, 512, 512))
 
-	heights = [1, 2, 2]
-	channels = [128, 128, 256, 512]
+	heights = [1, 2, 2, 1]
+	channels = [64, 128, 128, 256, 512]
 	block = ResidualBlock
 
 	dla_down = DLADown(heights, channels, block)
 
 	y = dla_down.forward(img)
+
+	multi_ida_up = MultiIDAUp(channels)
+
+	z = multi_ida_up.forward(y)
+
+	ida_up = IDAUp(
+		feature_channels=[channels[-1] for _ in channels[1:]],
+		scales=[z[1].size(2) // z[i].size(2) for i in range(2, len(channels))],
+	)
+
+	ida_up(z, 2, reverse=False)
+
+	out = z[-1]
 
 	pass
 
