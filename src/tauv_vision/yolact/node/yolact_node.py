@@ -59,6 +59,10 @@ class YolactNode:
         self._model(torch.rand(1, 3, self._model_config.in_h, self._model_config.in_w, device=self._device))
         rospy.logdebug(f"Done dry-running model.")
 
+        rospy.loginfo(f"Dry-running model...")
+        self._model(torch.rand(1, 3, self._model_config.in_h, self._model_config.in_w, device=self._device))
+        rospy.loginfo(f"Done dry-running model.")
+
         self._camera_infos: Dict[str, CameraInfo] = {}
         self._intrinsics: Dict[str, CameraIntrinsics] = {}
         self._synchronizers: Dict[str, ApproximateTimeSynchronizer] = {}
@@ -132,10 +136,10 @@ class YolactNode:
 
         end_time = time.time()
         rospy.logdebug(f"Processed prediction in {end_time - start_time} s")
-
         confidence_np = F.softmax(classification[0, detections], dim=-1).detach().cpu().numpy()
         class_id_np = np.argmax(confidence_np, axis=-1)
         box_np = box[0, detections].detach().cpu().numpy()
+
         mask_np = mask.detach().cpu().numpy()
 
         vis_img_np = plot_prediction_np(
