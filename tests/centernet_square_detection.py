@@ -7,138 +7,166 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import cv2
-import torchvision.transforms as tfs
+import torchvision.transforms.v2 as tfs
 import matplotlib.pyplot as plt
+import kornia.augmentation as A
 
-from tauv_vision.centernet.model.centernet import Centernet, initialize_weights
+from tauv_vision.centernet.model.centernet import Centernet, initialize_weights, Truth
 from tauv_vision.centernet.model.backbones.dla import DLABackbone
-from tauv_vision.centernet.model.loss import gaussian_splat, focal_loss, angle_loss, angle_decode
+from tauv_vision.centernet.model.loss import gaussian_splat, loss
+from tauv_vision.centernet.model.config import ObjectConfig, ObjectConfigSet, AngleConfig, ModelConfig, TrainConfig
 
 torch.autograd.set_detect_anomaly(True)
 
+model_config = ModelConfig(
+    in_h=512,
+    in_w=512,
+    backbone_heights=[2, 2, 2, 2, 2, 2],
+    backbone_channels=[32, 32, 32, 32, 32, 32, 32],
+    downsample_ratio=2,
+    angle_bin_overlap=pi / 3,
+)
 
-def generate_sample(img_h: int, img_w: int) -> Tuple[torch.Tensor, torch.Tensor]:
-    # img = torch.rand((3, img_h, img_w))
+train_config = TrainConfig(
+    lr=1e-3,
+    heatmap_focal_loss_a=2,
+    heatmap_focal_loss_b=4,
+    batch_size=24,
+    n_batches=10000,
+    loss_lambda_size=0.01,
+    loss_lambda_offset=0, # Not set up to train properly
+    loss_lambda_angle=0,
+    loss_lambda_depth=0,
+)
 
-    w = random.randint(50, 150)
-    h = w
-    # h = random.randint(50, 150)
-    # w = 100
-    # h = 100
+object_config = ObjectConfigSet(
+    configs=[
+        ObjectConfig(
+            id="square",
+            yaw=AngleConfig(
+                train=True,
+                modulo=pi / 2,
+            ),
+            pitch=AngleConfig(
+                train=False,
+                modulo=None,
+            ),
+            roll=AngleConfig(
+                train=False,
+                modulo=None,
+            ),
+            train_depth=False,
+        )
+    ]
+)
 
-    y = random.randint(h, img_h - h - 1)
-    x = random.randint(w, img_w - w - 1)
-    # y = img_h // 2
-    # x = img_w // 2
 
-    theta = random.uniform(0, pi / 2)
-    # theta = 0
+def get_batch(model_config: ModelConfig, train_config: TrainConfig) -> Tuple[torch.Tensor, Truth]:
+    heatmap = torch.zeros((train_config.batch_size, 1, model_config.out_h, model_config.out_w), dtype=torch.float32)
+    img = torch.zeros((train_config.batch_size, 3, model_config.in_h, model_config.in_w), dtype=torch.float32)
 
-    thickness = floor(0.2 * (w + h) / 2)
+    valid = torch.ones((train_config.batch_size, 1), dtype=torch.bool)
+    label = torch.zeros((train_config.batch_size, 1), dtype=torch.long)
 
-    img_np = (10 * np.random.rand(img_h, img_w, 3)).astype(np.uint8)
-    rot_matrix = np.array([
-        [cos(theta), -sin(theta)],
-        [sin(theta), cos(theta)]
-    ])
-    corners = np.array([
-        [-w / 2, -h / 2],
-        [w / 2, -h / 2],
-        [w / 2, h / 2],
-        [-w / 2, h / 2]
-    ])
-    rotated_corners = (corners @ np.transpose(rot_matrix)) + np.array([[x, y]])
-    # box = cv2.boxPoints(((x, y), (w, h), np.).astype(np.intp)
-    cv2.drawContours(img_np, [rotated_corners.astype(np.intp)], 0, (255, 0, 0), thickness)
+    center = ((model_config.in_h - 200) * torch.rand((train_config.batch_size, 1, 2)) + 100).to(torch.int)
 
-    img = torch.from_numpy(img_np).permute(2, 0, 1).to(torch.float)
+    size = torch.zeros((train_config.batch_size, 1, 2), dtype=torch.float)
+    size[:, :, 0] = 100 * torch.rand((train_config.batch_size, 1)) + 50
+    size[:, :, 1] = size[:, :, 0]
 
-    # img[:, y:y + h + 1, x:x + w + 1] = torch.Tensor([1, 0, 0]).unsqueeze(1).unsqueeze(2)
+    yaw: torch.Tensor = torch.rand((train_config.batch_size, 1)) * (pi / 2)
 
-    sigma = 0.05 * (w + h) / 2
-    # truth_heatmap = gaussian_splat(img_h // 4, img_w // 4, y // 4, x // 4, sigma)
-    truth_heatmap = gaussian_splat(img_h // 2, img_w // 2, int(y / 2), int(x / 2), sigma)
+    for sample_i in range(train_config.batch_size):
+        sample_yaw = float(yaw[sample_i, 0])
+        sample_h = int(size[sample_i, 0, 0])
+        sample_w = int(size[sample_i, 0, 1])
+        sample_y = int(center[sample_i, 0, 0])
+        sample_x = int(center[sample_i, 0, 1])
 
-    return img, truth_heatmap, w, h, theta
+        thickness = floor(0.2 * (sample_h + sample_w) / 2)
+
+        rot_matrix = np.array([
+            [cos(sample_yaw), -sin(sample_yaw)],
+            [sin(sample_yaw), cos(sample_yaw)]
+        ])
+        corners = np.array([
+            [-sample_w / 2, -sample_h / 2],
+            [sample_w / 2, -sample_h / 2],
+            [sample_w / 2, sample_h / 2],
+            [-sample_w / 2, sample_h / 2]
+        ])
+
+        rotated_corners = (corners @ np.transpose(rot_matrix)) + np.array([[sample_x, sample_y]])
+
+        img_np = (255 * np.random.rand(model_config.in_h, model_config.in_w, 3)).astype(np.uint8)
+        cv2.drawContours(img_np, [rotated_corners.astype(np.intp)], 0, (255, 0, 0), thickness)
+
+        img[sample_i] = torch.from_numpy(img_np).permute(2, 0, 1).to(torch.float) / 255
+
+        sigma = 0.05 * (sample_h + sample_w) / 2
+
+        heatmap[sample_i] = gaussian_splat(
+            model_config.out_h, model_config.out_w,
+            int(sample_y // model_config.downsample_ratio), int(sample_x // model_config.downsample_ratio),
+            sigma,
+        )
+
+    truth = Truth(
+        heatmap=heatmap,
+        valid=valid,
+        label=label,
+        center=center,
+        size=size,
+        roll=None,
+        pitch=None,
+        yaw=yaw,
+        depth=None,
+    )
+
+    return img, truth
 
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(device)
-    heights = [2, 2, 2, 2]
-    channels = [32, 32, 32, 32, 32]
-    out_channels = [1, 2, 4, 4]
+    # device = torch.device("cpu")
+    print(f"running on {device}")
 
-    n_batches = 1000
-    batch_size = 32
+    dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels)
+    centernet = Centernet(dla_backbone, object_config).to(device)
 
-    in_h = 512
-    in_w = 512
-
-    alpha = 2
-    beta = 4
-
-    dla_backbone = DLABackbone(heights, channels)
-    centernet = Centernet(dla_backbone, out_channels).to(device)
     centernet.train()
     initialize_weights(centernet, [])
 
     optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-3)
 
-    for batch_i in range(n_batches):
-        img = torch.zeros((batch_size, 3, in_h, in_w), device=device)
-        truth_heatmap = torch.zeros(batch_size, 1, in_h // 2, in_w // 2, device=device)
-        w = torch.zeros(batch_size, device=device)
-        h = torch.zeros(batch_size, device=device)
-        theta = torch.zeros(batch_size, device=device)
+    color_transforms = A.AugmentationSequential(
+        A.ColorJitter(hue=0.0, saturation=0.0, brightness=0.0),
+        A.Normalize(mean=(0.51, 0.48, 0.48), std=(0.29, 0.29, 0.29))
+    )
 
-        for sample_i in range(batch_size):
-            sample_img, sample_truth_heatmap, sample_w, sample_h, sample_theta = generate_sample(in_h, in_w)
-            sample_img = tfs.Normalize((0.5, 0.5, 0.5), (1, 1, 1))(sample_img)
-            img[sample_i] = sample_img
-            truth_heatmap[sample_i] = sample_truth_heatmap.unsqueeze(0)
-            w[sample_i] = sample_w
-            h[sample_i] = sample_h
-            theta[sample_i] = sample_theta
+    for batch_i in range(train_config.n_batches):
+        img, truth = get_batch(model_config, train_config)
+        img = img.to(device)
+        truth = truth.to(device)
+
+        img_norm = color_transforms(img)
 
         optimizer.zero_grad()
 
-        prediction = centernet(img)
-        predicted_heatmap = prediction[0]
-        predicted_h = prediction[1][:, 0]
-        predicted_w = prediction[1][:, 1]
-        predicted_theta_bin = prediction[2].permute(0, 2, 3, 1)[truth_heatmap.squeeze(1) == 1].unsqueeze(1)
-        predicted_theta_offset = prediction[3].permute(0, 2, 3, 1)[truth_heatmap.squeeze(1) == 1].unsqueeze(1)
-        predicted_heatmap = F.sigmoid(predicted_heatmap)
+        prediction = centernet(img_norm)
 
-        fl = focal_loss(predicted_heatmap, truth_heatmap, alpha, beta)
-        sl = F.l1_loss(predicted_h[truth_heatmap.squeeze(1) == 1], h, reduction="none") + F.l1_loss(predicted_w[truth_heatmap.squeeze(1) == 1], w, reduction="none")
-        al = angle_loss(predicted_theta_bin, predicted_theta_offset, theta.unsqueeze(1), pi / 2, pi / 3)
+        l = loss(prediction, truth, model_config, train_config, object_config)
 
-        print(f"truth: {w}")
-        print(f"predicted: {predicted_w[truth_heatmap.squeeze(1) == 1]}")
-        print(f"error: {(torch.abs(w - predicted_w[truth_heatmap.squeeze(1) == 1]))}")
+        print(f"loss: {float(l)}")
 
-        print(f"truth: {theta}")
-        print(f"predicted: {angle_decode(predicted_theta_bin, predicted_theta_offset, pi / 2, pi / 3).squeeze(1)}")
-        print(f"error: {(torch.abs(theta - angle_decode(predicted_theta_bin, predicted_theta_offset, pi / 2, pi / 3).squeeze(1))) % (2 * pi)}")
-
-        # loss = fl.sum() + 0.1 * sl.sum() + 0.1 * al.sum()
-        loss = fl.sum() + 0.1 * sl.mean() + al.mean()
-        # loss = fl.sum() + 0.1 * sl.sum()
-        # loss = fl.sum() + 0.1 * (sl.sum() + al.sum())
-        # loss = fl.sum()
-
-        print(f"focal loss: {float(fl.sum())}, size loss: {float(sl.sum())}, angle loss: {float(al.sum())} total loss: {float(loss)}")
-        # loss = F.mse_loss(predicted_heatmap, truth_heatmap, reduction="none")
-        if batch_i % 10 == 0:
-            plt.figure()
-            plt.imshow(predicted_heatmap[0, 0].detach().cpu())
-            plt.show()
-
-        loss.sum().backward()
+        l.backward()
 
         optimizer.step()
+
+        if batch_i % 10 == 0:
+            plt.imshow(F.sigmoid(prediction.heatmap[0, 0]).detach().cpu())
+            plt.colorbar()
+            plt.show()
 
 
 if __name__ == "__main__":

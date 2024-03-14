@@ -240,7 +240,7 @@ class IDAUp(nn.Module):
 		self.output_layers = nn.ModuleList(output_layers)
 		self.upsample_layers = nn.ModuleList(upsample_layers)
 
-	def forward(self, features: List[torch.Tensor]):
+	def forward(self, features: List[torch.Tensor]) -> List[torch.Tensor]:
 		assert len(features) == len(self.projection_layers) + 1
 
 		new_features = []
@@ -257,6 +257,78 @@ class IDAUp(nn.Module):
 			new_features.append(new_feature)
 
 		new_features = list(reversed(new_features))
+
+		return new_features
+
+
+class IDAUpReverse(nn.Module):
+
+	def __init__(self, feature_channels: List[int], scales: List[int]):
+		super().__init__()
+
+		assert len(scales) == len(feature_channels) - 1
+
+		projection_layers = []
+		output_layers = []
+		upsample_layers = []
+
+		self.feature_channels = feature_channels
+
+		for feature_i in range(len(feature_channels) - 1):
+			projection_layer = nn.Sequential(
+				nn.Conv2d(
+					in_channels=feature_channels[feature_i + 1],
+					out_channels=feature_channels[0],
+					kernel_size=3,
+					padding=1,
+					stride=1,
+				),
+				nn.BatchNorm2d(feature_channels[0]),
+				nn.ReLU(),
+			)
+
+			output_layer = nn.Sequential(
+				nn.Conv2d(
+					in_channels=feature_channels[0],
+					out_channels=feature_channels[0],
+					kernel_size=3,
+					padding=1,
+					stride=1,
+				),
+				nn.BatchNorm2d(feature_channels[0]),
+				nn.ReLU(),
+			)
+
+			upsample_layer = nn.ConvTranspose2d(
+				in_channels=feature_channels[0],
+				out_channels=feature_channels[0],
+				kernel_size=scales[feature_i],
+				stride=scales[feature_i],
+			)
+
+			projection_layers.append(projection_layer)
+			output_layers.append(output_layer)
+			upsample_layers.append(upsample_layer)
+
+		self.projection_layers = nn.ModuleList(projection_layers)
+		self.output_layers = nn.ModuleList(output_layers)
+		self.upsample_layers = nn.ModuleList(upsample_layers)
+
+	def forward(self, features: List[torch.Tensor]) -> List[torch.Tensor]:
+		assert len(features) == len(self.projection_layers) + 1
+
+		new_features = []
+
+		new_feature = features[0]
+
+		for feature_i in range(len(features) - 1):
+			project = self.projection_layers[feature_i]
+			output = self.output_layers[feature_i]
+			upsample = self.upsample_layers[feature_i]
+
+			new_feature = output(new_feature + upsample(project(features[feature_i + 1])))
+
+			new_features.append(new_feature)
 
 		return new_features
 
@@ -303,21 +375,21 @@ class DLABackbone(nn.Module):
 
 		self.dla_down = DLADown(heights, channels, block)
 		self.multi_ida_up = MultiIDAUp(channels)
-		self.ida_up = IDAUp(
+		self.ida_up_reverse = IDAUpReverse(
 			feature_channels=channels[:len(channels) - 1],
 			scales=[2 ** i for i in range(1, len(channels) - 1)],
 		)
 
-		self.out_channels = channels[-1]
+		self.out_channels = channels[0]
 
 	def forward(self, img: torch.Tensor) -> torch.Tensor:
 		features = self.dla_down.forward(img)
 		features = self.multi_ida_up.forward(features)
 
 		# 128, 128, 64, 64
-		# features = self.ida_up(features)
+		features = self.ida_up_reverse(features)
 
-		return features[0]
+		return features[-1]
 
 
 def main():
