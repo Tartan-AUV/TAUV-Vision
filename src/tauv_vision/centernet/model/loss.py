@@ -1,11 +1,12 @@
 import torch
-from math import pi
+from math import pi, floor
 import torch.nn.functional as F
 from enum import Enum
 
 from tauv_vision.centernet.model.centernet import Prediction, Truth
 from tauv_vision.centernet.model.decode import angle_get_bins
 from tauv_vision.centernet.model.config import ModelConfig, TrainConfig, ObjectConfig, ObjectConfigSet, AngleConfig
+from tauv_vision.datasets.load.pose_dataset import PoseSample
 
 
 def gaussian_splat(h: int, w: int, cy: int, cx: int, sigma: float) -> torch.Tensor:
@@ -17,6 +18,49 @@ def gaussian_splat(h: int, w: int, cy: int, cx: int, sigma: float) -> torch.Tens
     out = torch.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sigma ** 2))
 
     return out
+
+
+def generate_heatmap(truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> torch.Tensor:
+    # result is [batch_size, n_labels, out_h, out_w]
+
+    batch_size, n_objects = truth.valid.shape
+    n_labels = object_config.n_labels
+    out_h = model_config.out_h
+    out_w = model_config.out_w
+
+    heatmap = torch.zeros((batch_size, n_labels, out_h, out_w), dtype=torch.float32, device=truth.valid.device)
+
+    y = torch.arange(0, out_h, device=truth.valid.device)
+    x = torch.arange(0, out_w, device=truth.valid.device)
+
+    y, x = torch.meshgrid(y, x, indexing="ij")
+
+    for sample_i in range(batch_size):
+        for object_i in range(n_objects):
+            if not truth.valid[sample_i, object_i]:
+                continue
+
+            cy = floor(truth.center[sample_i, object_i, 0] * model_config.in_h / model_config.downsample_ratio)
+            cx = floor(truth.center[sample_i, object_i, 1] * model_config.in_w / model_config.downsample_ratio)
+
+            h = float(truth.size[sample_i, object_i, 0] * model_config.in_h)
+            w = float(truth.size[sample_i, object_i, 1] * model_config.in_w)
+
+            sigma = train_config.heatmap_sigma_factor * (h + w) / 2
+
+            if sigma < 0.1:
+                print("tiny sigma!")
+                sigma = 0.1
+
+            heatmap[sample_i, truth.label[sample_i, object_i]] = torch.maximum(
+                    heatmap[sample_i, truth.label[sample_i, object_i]],
+                    torch.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sigma ** 2))
+            )
+
+    # TODO: get rid of this, this really shouldn't be necessary
+    heatmap = torch.nan_to_num(heatmap)
+
+    return heatmap
 
 
 def out_index_for_position(position: torch.Tensor, model_config: ModelConfig) -> torch.Tensor:
@@ -56,7 +100,10 @@ def angle_range(truth_label: torch.Tensor, object_config: ObjectConfigSet, angle
     return result.to(device)
 
 
-def loss(prediction: Prediction, truth: Truth, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> torch.Tensor:
+def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> torch.Tensor:
+
+    # TODO: Generate heatmap here based on truth
+    heatmap = generate_heatmap(truth, model_config, train_config, object_config)
 
     out_index = out_index_for_position(truth.center, model_config) # [batch_size, n_objects, 2]
 
@@ -93,7 +140,7 @@ def loss(prediction: Prediction, truth: Truth, model_config: ModelConfig, train_
 
             if prediction.pitch_bin is not None:
                 prediction_pitch_bin[sample_i, object_i] = prediction.pitch_bin[sample_i, out_index[sample_i, object_i, 0], out_index[sample_i, object_i, 1]]
-                prediction_pitch_offset[sample_i, object_i] = prediction.pitch_offset[sample_i, out_index[sample_i, object_i], out_index[sample_i, object_i, 0], out_index[sample_i, object_i, 1]]
+                prediction_pitch_offset[sample_i, object_i] = prediction.pitch_offset[sample_i, out_index[sample_i, object_i, 0], out_index[sample_i, object_i, 1]]
 
             if prediction.yaw_bin is not None:
                 prediction_yaw_bin[sample_i, object_i] = prediction.yaw_bin[sample_i, out_index[sample_i, object_i, 0], out_index[sample_i, object_i, 1]]
@@ -104,15 +151,15 @@ def loss(prediction: Prediction, truth: Truth, model_config: ModelConfig, train_
 
     n_valid = truth.valid.to(torch.float32).sum()
 
-    l_heatmap = focal_loss(F.sigmoid(prediction.heatmap), truth.heatmap, alpha=train_config.heatmap_focal_loss_a, beta=train_config.heatmap_focal_loss_b)
+    l_heatmap = focal_loss(F.sigmoid(prediction.heatmap), heatmap, alpha=train_config.heatmap_focal_loss_a, beta=train_config.heatmap_focal_loss_b)
 
     l = l_heatmap.sum()
 
-    l_size = F.smooth_l1_loss(prediction_size, truth.size, reduction="none")
-    l += train_config.loss_lambda_size * (truth.valid * l_size).sum() / n_valid
+    # l_size = F.smooth_l1_loss(prediction_size, truth.size, reduction="none")
+    # l += train_config.loss_lambda_size * (truth.valid.unsqueeze(-1) * l_size).sum() / n_valid
 
     l_offset = F.smooth_l1_loss(prediction_offset, truth.center - model_config.downsample_ratio * (truth.center / model_config.downsample_ratio).to(torch.long), reduction="none")
-    l += train_config.loss_lambda_offset * (truth.valid * l_offset).sum() / n_valid
+    l += train_config.loss_lambda_offset * (truth.valid.unsqueeze(-1) * l_offset).sum() / n_valid
 
     if prediction.roll_bin is not None:
         roll_theta_range = angle_range(truth.label, object_config, Angle.Roll)
@@ -139,6 +186,8 @@ def focal_loss(prediction: torch.Tensor, truth: torch.Tensor, alpha: float, beta
     p = torch.isclose(truth, torch.Tensor([1]).to(truth.device))
     N = torch.sum(p)
 
+    print("heatmap: ", prediction.min(), prediction.max())
+    print("heatmap truth: ", truth.min(), truth.max())
     loss_p = ((1 - prediction) ** alpha) * torch.log(torch.clamp(prediction, min=1e-4)) * p.float()
     loss_n = ((1 - truth) ** beta) * (prediction ** alpha) * torch.log(torch.clamp(1 - prediction, min=1e-4)) * (1 - p.float())
 

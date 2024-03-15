@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict
 
 from dataclasses import dataclass
 
@@ -30,9 +30,13 @@ class TrainConfig:
 
     batch_size: int
     n_batches: int
+    n_epochs: int
+
+    n_workers: int
 
     heatmap_focal_loss_a: float
     heatmap_focal_loss_b: float
+    heatmap_sigma_factor: float
 
     loss_lambda_size: float
     loss_lambda_offset: float
@@ -81,3 +85,7 @@ class ObjectConfigSet:
     @property
     def n_labels(self) -> int:
         return len(self.configs)
+
+    @property
+    def label_id_to_index(self) -> Dict[str, int]:
+        return {config.id: i for (i, config) in enumerate(self.configs)}

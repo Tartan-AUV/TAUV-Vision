@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -187,6 +187,23 @@ class DLADown(nn.Module):
 		return y
 
 
+def pad_to_match(feature: torch.Tensor, shape: Tuple[int, ...]) -> torch.Tensor:
+	if feature.shape == shape:
+		return feature
+
+	pad_above = max(0, (feature.shape[2] - shape[2]) // 2)
+	pad_below = max(0, shape[2] - feature.shape[2] - pad_above)
+
+	pad_left = max(0, (feature.shape[3] - shape[3]) // 2)
+	pad_right = max(0, shape[3] - feature.shape[3] - pad_left)
+
+	padded_feature = F.pad(feature, (pad_above, pad_below, pad_left, pad_right))
+
+	result = padded_feature[:, :, :shape[2], :shape[3]]
+
+	return result
+
+
 class IDAUp(nn.Module):
 
 	def __init__(self, feature_channels: List[int], scales: List[int]):
@@ -252,7 +269,8 @@ class IDAUp(nn.Module):
 			output = self.output_layers[feature_i]
 			upsample = self.upsample_layers[feature_i]
 
-			new_feature = output(features[feature_i] + upsample(project(new_feature)))
+			upsampled_feature = upsample(project(new_feature))
+			new_feature = output(features[feature_i] + pad_to_match(upsampled_feature, features[feature_i].shape))
 
 			new_features.append(new_feature)
 
@@ -326,7 +344,8 @@ class IDAUpReverse(nn.Module):
 			output = self.output_layers[feature_i]
 			upsample = self.upsample_layers[feature_i]
 
-			new_feature = output(new_feature + upsample(project(features[feature_i + 1])))
+			upsampled_feature = upsample(project(features[feature_i + 1]))
+			new_feature = output(new_feature + pad_to_match(upsampled_feature, new_feature.shape))
 
 			new_features.append(new_feature)
 

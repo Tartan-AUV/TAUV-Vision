@@ -2,7 +2,6 @@ import argparse
 from pathlib import Path
 from typing import List, Set
 import numpy as np
-import human_id
 from math import pi
 import glob
 import re
@@ -13,6 +12,7 @@ import random
 import dirhash
 import datetime
 from spatialmath import SE3, SO3
+import human_id
 
 
 def wrap(angle: float) -> float:
@@ -210,7 +210,7 @@ def convert_sample(replicator_out_dir: Path, dataset_dir: Path, sample_id: str) 
         p1_3d_cam = (cam_t_object * p1_3d_object).flatten()
 
         objects.append({
-            "class_id": bbox_class_id,
+            "label": bbox_class_id,
             "visibility": round(1 - occlusion, 4),
             "bbox": {
                 "y": round(bbox_y, 4),
@@ -266,7 +266,7 @@ def convert_sample(replicator_out_dir: Path, dataset_dir: Path, sample_id: str) 
     return class_ids
 
 
-def convert(replicator_out_dir: Path, datasets_dir: Path, dataset_type: str, splits: List[float], email: str, description: str):
+def convert(replicator_out_dir: Path, datasets_dir: Path, splits: List[float], email: str, description: str):
     if not np.isclose(sum(splits), 1):
         raise ValueError(f"Error: splits must sum to 1")
 
@@ -274,10 +274,9 @@ def convert(replicator_out_dir: Path, datasets_dir: Path, dataset_type: str, spl
         raise ValueError(f"Error: {replicator_out_dir} does not exist")
 
     if not datasets_dir.exists() or not datasets_dir.is_dir():
-        raise ValueError(f"Error: {replicator_out_dir} does not exist")
+        raise ValueError(f"Error: {datasets_dir} does not exist")
 
     dataset_id = human_id.generate_id(word_count=3)
-    # dataset_id = "test"
 
     dataset_dir = datasets_dir / dataset_id
 
@@ -287,12 +286,9 @@ def convert(replicator_out_dir: Path, datasets_dir: Path, dataset_type: str, spl
 
     if dataset_dir.exists():
         raise ValueError(f"Error: {dataset_dir} already exists")
-        # shutil.rmtree(dataset_dir)
-        # dataset_dir.unlink()
 
     print(f"Creating dataset {dataset_dir}...")
     print(f"Input: {replicator_out_dir}")
-    print(f"Type: {dataset_type}")
     print(f"Author: {email}")
     print(f"Description: {description}")
 
@@ -347,7 +343,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("replicator_out_dir")
     parser.add_argument("datasets_dir")
-    parser.add_argument("--dataset_type", choices=["seg"], required=True)
     parser.add_argument("--splits", type=float, nargs=3, required=True)
     parser.add_argument("--email", type=str, required=True)
     parser.add_argument("--description", type=str, required=True)
@@ -357,7 +352,7 @@ def main():
     replicator_out_dir = Path(args.replicator_out_dir).expanduser()
     datasets_dir = Path(args.datasets_dir).expanduser()
 
-    convert(replicator_out_dir, datasets_dir, args.dataset_type, args.splits, args.email, args.description)
+    convert(replicator_out_dir, datasets_dir, args.splits, args.email, args.description)
 
 
 if __name__ == "__main__":

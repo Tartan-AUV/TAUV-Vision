@@ -182,7 +182,7 @@ def main():
 	backbone = DLABackbone(backbone_heights, backbone_channels)
 	centernet = Centernet(backbone, object_config)
 
-	img = torch.rand(1, 3, 512, 512)
+	img = torch.rand(1, 3, 360, 640)
 	prediction = centernet(img)
 
 	pass
