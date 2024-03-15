@@ -2,7 +2,10 @@ import omni.replicator.core as rep
 import sys
 import asyncio
 
-rep.settings.set_render_pathtraced(16)
+# ~/.local/share/ov/pkg/code-2022.3.3/omni.code.sh --no-window --/omni/replicator/script=/home/theo/Documents/yolo_pose/replicator/randomize.py
+
+# Camera params fails if this is turned on
+# rep.settings.set_render_pathtraced(16)
 
 NUM_FRAMES = 10000
 
@@ -161,9 +164,14 @@ with rep.new_layer():
     instance_seg_annot = rep.AnnotatorRegistry.get_annotator("instance_segmentation_fast")
     instance_seg_annot.attach([render_product])
 
+    # rep.AnnotatorRegistry.unregister_annotator("camera_params")
+    camera_params_annot = rep.AnnotatorRegistry.get_annotator("camera_params")
+    camera_params_annot.attach([render_product])
+
     basic_writer = rep.BasicWriter(
         output_dir=f"/home/theo/Documents/replicator_out/",
         colorize_instance_segmentation=False,
+        # camera_params=True,
     )
 
     with rep.trigger.on_frame():
@@ -194,12 +202,16 @@ with rep.new_layer():
             instance_seg_data = instance_seg_annot.get_data()
             print(f"instance_seg_data: {instance_seg_data}")
 
+            camera_params_data = camera_params_annot.get_data()
+            print(f"camera_params_data: {camera_params_data}")
+
             basic_writer.write({
                 "trigger_outputs": {"on_time": 0},
                 "rgb": rgb_data,
                 "bounding_box_2d_tight": bbox_data,
                 "bounding_box_3d": bbox3d_data,
                 "instance_segmentation": instance_seg_data,
+                "camera_params": camera_params_data,
             })
 
     asyncio.ensure_future(run())
