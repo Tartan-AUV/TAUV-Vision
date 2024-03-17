@@ -2,6 +2,7 @@ import torch
 from math import pi, floor
 import torch.nn.functional as F
 from enum import Enum
+from dataclasses import dataclass
 
 from tauv_vision.centernet.model.centernet import Prediction, Truth
 from tauv_vision.centernet.model.decode import angle_get_bins
@@ -9,15 +10,20 @@ from tauv_vision.centernet.model.config import ModelConfig, TrainConfig, ObjectC
 from tauv_vision.datasets.load.pose_dataset import PoseSample
 
 
-def gaussian_splat(h: int, w: int, cy: int, cx: int, sigma: float) -> torch.Tensor:
-    y = torch.arange(0, h)
-    x = torch.arange(0, w)
+@dataclass
+class Losses:
+    total: torch.Tensor = torch.zeros(1)
+    heatmap: torch.Tensor = torch.zeros(1)
+    offset: torch.Tensor = torch.zeros(1)
+    size: torch.Tensor = torch.zeros(1)
+    roll: torch.Tensor = torch.zeros(1)
+    pitch: torch.Tensor = torch.zeros(1)
+    yaw: torch.Tensor = torch.zeros(1)
+    depth: torch.Tensor = torch.zeros(1)
 
-    y, x = torch.meshgrid(y, x, indexing="ij")
+    avg_size_error: torch.Tensor = torch.zeros(1)
+    max_size_error: torch.Tensor = torch.zeros(1)
 
-    out = torch.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sigma ** 2))
-
-    return out
 
 
 def generate_heatmap(truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> torch.Tensor:
@@ -100,7 +106,9 @@ def angle_range(truth_label: torch.Tensor, object_config: ObjectConfigSet, angle
     return result.to(device)
 
 
-def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> torch.Tensor:
+def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> Losses:
+
+    losses = Losses()
 
     # TODO: Generate heatmap here based on truth
     heatmap = generate_heatmap(truth, model_config, train_config, object_config)
@@ -152,31 +160,60 @@ def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, t
     n_valid = truth.valid.to(torch.float32).sum()
 
     l_heatmap = focal_loss(F.sigmoid(prediction.heatmap), heatmap, alpha=train_config.heatmap_focal_loss_a, beta=train_config.heatmap_focal_loss_b)
+    l_heatmap = l_heatmap.sum()
+    losses.heatmap = l_heatmap
+    l = l_heatmap
 
-    l = l_heatmap.sum()
+    # truth_pixel_size = truth.size * torch.Tensor((model_config.in_h, model_config.in_w)).to(truth.size.device).unsqueeze(0).unsqueeze(1)
+    l_size = F.l1_loss(prediction_size, truth.size, reduction="none")
+    l_size = train_config.loss_lambda_size * (truth.valid.unsqueeze(-1) * l_size).sum() / n_valid
+    losses.size = l_size
+    l += l_size
 
-    # l_size = F.smooth_l1_loss(prediction_size, truth.size, reduction="none")
-    # l += train_config.loss_lambda_size * (truth.valid.unsqueeze(-1) * l_size).sum() / n_valid
+    size_error = torch.where(truth.valid.unsqueeze(-1), torch.abs(prediction_size - truth.size), torch.nan)
+    avg_size_error = size_error.nanmean()
+    max_size_error = torch.where(torch.isnan(size_error), 0, size_error).max()
 
-    l_offset = F.smooth_l1_loss(prediction_offset, truth.center - model_config.downsample_ratio * (truth.center / model_config.downsample_ratio).to(torch.long), reduction="none")
-    l += train_config.loss_lambda_offset * (truth.valid.unsqueeze(-1) * l_offset).sum() / n_valid
+    losses.avg_size_error = avg_size_error
+    losses.max_size_error = max_size_error
+
+    truth_pixel_center = truth.center * torch.Tensor((model_config.in_h, model_config.in_w)).to(truth.center.device).unsqueeze(0).unsqueeze(1)
+    truth_pixel_offset = truth_pixel_center - model_config.downsample_ratio * (truth_pixel_center / model_config.downsample_ratio).to(torch.long)
+    l_offset = F.l1_loss(prediction_offset, truth_pixel_offset, reduction="none")
+    l_offset = train_config.loss_lambda_offset * (truth.valid.unsqueeze(-1) * l_offset).sum() / n_valid
+    losses.offset = l_offset
+    l += l_offset
 
     if prediction.roll_bin is not None:
         roll_theta_range = angle_range(truth.label, object_config, Angle.Roll)
         l_roll = angle_loss(prediction_roll_bin, prediction_roll_offset, truth.roll, roll_theta_range, model_config.angle_bin_overlap).sum()
-        l += train_config.loss_lambda_angle * (truth.valid * l_roll).sum() / n_valid
+        l_roll = train_config.loss_lambda_angle * (truth.valid * l_roll).sum() / n_valid
+        losses.roll = l_roll
+        l += l_roll
 
     if prediction.pitch_bin is not None:
         pitch_theta_range = angle_range(truth.label, object_config, Angle.Pitch)
         l_pitch = angle_loss(prediction_pitch_bin, prediction_pitch_offset, truth.pitch, pitch_theta_range, model_config.angle_bin_overlap).sum()
-        l += train_config.loss_lambda_angle * (truth.valid * l_pitch).sum() / n_valid
+        l_pitch = train_config.loss_lambda_angle * (truth.valid * l_pitch).sum() / n_valid
+        losses.pitch = l_pitch
+        l += l_pitch
 
     if prediction.yaw_bin is not None:
         yaw_theta_range = angle_range(truth.label, object_config, Angle.Yaw)
         l_yaw = angle_loss(prediction_yaw_bin, prediction_yaw_offset, truth.yaw, yaw_theta_range, model_config.angle_bin_overlap).sum()
-        l += train_config.loss_lambda_angle * (truth.valid * l_yaw).sum() / n_valid
+        l_yaw = train_config.loss_lambda_angle * (truth.valid * l_yaw).sum() / n_valid
+        losses.yaw = l_yaw
+        l += l_yaw
 
-    return l
+    if prediction.depth is not None:
+        l_depth = depth_loss(prediction_depth, truth.depth)
+        l_depth = train_config.loss_lambda_depth * (truth.valid * l_depth).sum() / n_valid
+        losses.depth = l_depth
+        l += l_depth
+
+    losses.total = l
+
+    return losses
 
 
 def focal_loss(prediction: torch.Tensor, truth: torch.Tensor, alpha: float, beta: float) -> torch.Tensor:
@@ -186,8 +223,6 @@ def focal_loss(prediction: torch.Tensor, truth: torch.Tensor, alpha: float, beta
     p = torch.isclose(truth, torch.Tensor([1]).to(truth.device))
     N = torch.sum(p)
 
-    print("heatmap: ", prediction.min(), prediction.max())
-    print("heatmap truth: ", truth.min(), truth.max())
     loss_p = ((1 - prediction) ** alpha) * torch.log(torch.clamp(prediction, min=1e-4)) * p.float()
     loss_n = ((1 - truth) ** beta) * (prediction ** alpha) * torch.log(torch.clamp(1 - prediction, min=1e-4)) * (1 - p.float())
 

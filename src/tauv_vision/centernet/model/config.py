@@ -11,7 +11,7 @@ class ModelConfig:
     in_h: int
     in_w: int
 
-    downsample_ratio: int
+    downsamples: int
 
     angle_bin_overlap: float
 
@@ -23,6 +23,10 @@ class ModelConfig:
     def out_w(self) -> int:
         return self.in_w // self.downsample_ratio
 
+    @property
+    def downsample_ratio(self) -> int:
+        return 2 ** self.downsamples
+
 
 @dataclass
 class TrainConfig:
@@ -32,8 +36,6 @@ class TrainConfig:
     n_batches: int
     n_epochs: int
 
-    n_workers: int
-
     heatmap_focal_loss_a: float
     heatmap_focal_loss_b: float
     heatmap_sigma_factor: float
@@ -42,6 +44,10 @@ class TrainConfig:
     loss_lambda_offset: float
     loss_lambda_angle: float
     loss_lambda_depth: float
+
+    n_workers: int
+
+    weight_save_interval: int
 
 
 @dataclass

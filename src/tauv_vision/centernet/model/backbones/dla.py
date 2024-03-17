@@ -137,7 +137,7 @@ class Tree(nn.Module):
 
 class DLADown(nn.Module):
 
-	def __init__(self, heights: List[int], channels: List[int], block: nn.Module):
+	def __init__(self, heights: List[int], channels: List[int], downsamples: int, block: nn.Module):
 		super().__init__()
 
 		self.projection_layer = nn.Sequential(
@@ -152,10 +152,15 @@ class DLADown(nn.Module):
 			nn.ReLU(),
 		)
 
-		self.block_layer = ResidualBlock(
-			in_channels=channels[0],
-			out_channels=channels[0],
-			stride=2,
+		self.block_layers = nn.Sequential(
+			*[
+				ResidualBlock(
+					in_channels=channels[0],
+					out_channels=channels[0],
+					stride=2,
+				)
+				for _ in range(downsamples)
+			]
 		)
 
 		tree_layers = []
@@ -176,7 +181,7 @@ class DLADown(nn.Module):
 
 	def forward(self, img: torch.Tensor) -> List[torch.Tensor]:
 		x = self.projection_layer(img)
-		x = self.block_layer(x)
+		x = self.block_layers(x)
 
 		y = [x]
 
@@ -387,12 +392,12 @@ class MultiIDAUp(nn.Module):
 
 class DLABackbone(nn.Module):
 
-	def __init__(self, heights: List[int], channels: List[int]):
+	def __init__(self, heights: List[int], channels: List[int], downsamples: int):
 		super().__init__()
 
 		block = ResidualBlock
 
-		self.dla_down = DLADown(heights, channels, block)
+		self.dla_down = DLADown(heights, channels, downsamples, block)
 		self.multi_ida_up = MultiIDAUp(channels)
 		self.ida_up_reverse = IDAUpReverse(
 			feature_channels=channels[:len(channels) - 1],

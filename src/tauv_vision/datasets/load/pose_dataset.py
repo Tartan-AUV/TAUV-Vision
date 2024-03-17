@@ -1,4 +1,5 @@
 from enum import Enum
+import numpy as np
 import pathlib
 import random
 import json
@@ -46,7 +47,7 @@ class PoseSample:
         )
 
     @classmethod
-    def load(cls, data_path: pathlib.Path, id: str, label_id_to_index: Dict[str, int]) -> Self:
+    def load(cls, data_path: pathlib.Path, id: str, label_id_to_index: Dict[str, int], transform) -> Self:
         json_path = (data_path / id).with_suffix(".json")
         img_path = (data_path / id).with_suffix(".png")
 
@@ -55,10 +56,23 @@ class PoseSample:
 
         img_pil = Image.open(img_path).convert("RGB")
 
-        tf = T.Compose([T.ToImageTensor(), T.ConvertImageDtype()])
-        img = tf(img_pil)
+        to_tensor = T.Compose([T.ToImageTensor(), T.ConvertImageDtype()])
 
-        filtered_objects = [object for object in data["objects"] if object["label"] in label_id_to_index]
+        img_np = np.array(img_pil.convert("RGB"))
+
+        if transform is not None:
+            transformed = transform(
+                image=img_np,
+            )
+
+            img_np = transformed["image"]
+
+        img = to_tensor(img_np)
+
+        filtered_objects = [
+            object for object in data["objects"]
+            if object["label"] in label_id_to_index and object["bbox"]["h"] > 0.01 and object["bbox"]["w"] > 0.01
+        ]
 
         n_objects = len(filtered_objects)
 
@@ -158,7 +172,7 @@ class PoseSample:
 
 class PoseDataset(Dataset):
 
-    def __init__(self, root: pathlib.Path, split: Split, label_id_to_index: Dict[str, int]):
+    def __init__(self, root: pathlib.Path, split: Split, label_id_to_index: Dict[str, int], transform):
         super().__init__()
 
         self._root_path: pathlib.Path = root
@@ -177,11 +191,13 @@ class PoseDataset(Dataset):
 
         self._label_id_to_index: Dict[str, int] = label_id_to_index
 
+        self._transform = transform
+
     def __len__(self) -> int:
         return len(self._ids)
 
     def __getitem__(self, i: int):
-        return PoseSample.load(self._data_path, self._ids[i], self._label_id_to_index)
+        return PoseSample.load(self._data_path, self._ids[i], self._label_id_to_index, self._transform)
 
     def _get_ids(self) -> [str]:
         splits_json_path = self._root_path / "splits.json"

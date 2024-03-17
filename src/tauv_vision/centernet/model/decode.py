@@ -6,6 +6,7 @@ from math import pi
 import torch.nn.functional as F
 
 from tauv_vision.centernet.model.centernet import Prediction, Truth
+from tauv_vision.centernet.model.config import ModelConfig
 
 
 @dataclass
@@ -24,10 +25,11 @@ class Detection:
     depth: Optional[float] = None
 
 
-def decode(prediction: Prediction,
+def decode(prediction: Prediction, model_config: ModelConfig,
            n_detections: int, score_threshold: float) -> [[Detection]]:
 
-    heatmap = heatmap_nms(prediction.heatmap, kernel_size=3)
+    heatmap = F.sigmoid(prediction.heatmap)
+    heatmap = heatmap_nms(heatmap, kernel_size=3)
     detected_index, detected_label, detected_score = heatmap_detect(heatmap, n_detections)
 
     batch_size = detected_index.shape[0]
@@ -47,14 +49,16 @@ def decode(prediction: Prediction,
             detection = Detection(
                 label=detected_label[sample_i, detection_i],
                 score=detected_score[sample_i, detection_i],
-                y=float(detected_index[sample_i, detection_i, 0] + prediction.offset[sample_i][detected_index[sample_i, detection_i]][0]),
-                x=float(detected_index[sample_i, detection_i, 1] + prediction.offset[sample_i][detected_index[sample_i, detection_i]][1]),
-                h=float(prediction.size[sample_i][detected_index[sample_i, detection_i]][0]),
-                w=float(prediction.size[sample_i][detected_index[sample_i, detection_i]][1]),
+                y=(model_config.downsample_ratio * float(detected_index[sample_i, detection_i, 0]) + float(prediction.offset[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 0])) / model_config.in_h,
+                x=(model_config.downsample_ratio * float(detected_index[sample_i, detection_i, 1]) + float(prediction.offset[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 1])) / model_config.in_w,
+                h=float(prediction.size[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 0]),
+                w=float(prediction.size[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 1]),
             )
             
             # TODO: Fill in angles
             # TODO: Fill in depth
+
+            sample_detections.append(detection)
 
         detections.append(sample_detections)
 
