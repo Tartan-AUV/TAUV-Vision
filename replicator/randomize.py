@@ -1,6 +1,7 @@
 import omni.replicator.core as rep
 import sys
 import asyncio
+import carb.settings
 
 # ~/.local/share/ov/pkg/code-2022.3.3/omni.code.sh --no-window --/omni/replicator/script=/home/theo/Documents/yolo_pose/replicator/randomize.py
 
@@ -11,11 +12,10 @@ NUM_FRAMES = 10000
 
 SCENE_PRIM_PREFIX = "/Replicator/Ref_Xform/Ref"
 
+carb.settings.get_settings().set("/omni/replicator/RTSubframes", 8)
+
 with rep.new_layer():
     scene = rep.create.from_usd("/home/theo/Documents/yolo_pose/models/underwater_scene_1/underwater_scene_1.usd")
-
-    # Don't have scene create the objects.
-    # Create the objects at runtime using a choice of usd paths
 
     camera = rep.create.camera(
         position=(0, 0, 0),
@@ -126,20 +126,18 @@ with rep.new_layer():
     def randomize_objects():
         print("creating objects")
         objects = rep.randomizer.instantiate([
-            "/home/theo/Documents/yolo_pose/models/buoy_23/usd/buoy_23_1_final.usd",
-            "/home/theo/Documents/yolo_pose/models/buoy_23/usd/buoy_23_2_final.usd",
-            "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_gman_final.usd",
-            "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final.usd",
-        ], size=1, mode="point_instance", use_cache=False)
+            "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final_circle.usd",
+            "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final_trapezoid.usd",
+        ], size=1, mode="reference", use_cache=True)
         print("created objects")
 
         with objects:
             rep.modify.pose_camera_relative(
                 camera=camera,
                 render_product=render_product,
-                horizontal_location=rep.distribution.uniform(-0.5, 0.5),
-                vertical_location=rep.distribution.uniform(-0.5, 0.5),
-                distance=rep.distribution.uniform(200, 500),
+                horizontal_location=rep.distribution.uniform(-0.75, 0.75),
+                vertical_location=rep.distribution.uniform(-0.75, 0.75),
+                distance=rep.distribution.uniform(100, 400),
             )
 
             rep.modify.pose(
@@ -164,14 +162,12 @@ with rep.new_layer():
     instance_seg_annot = rep.AnnotatorRegistry.get_annotator("instance_segmentation_fast")
     instance_seg_annot.attach([render_product])
 
-    # rep.AnnotatorRegistry.unregister_annotator("camera_params")
     camera_params_annot = rep.AnnotatorRegistry.get_annotator("camera_params")
     camera_params_annot.attach([render_product])
 
     basic_writer = rep.BasicWriter(
         output_dir=f"/home/theo/Documents/replicator_out/",
         colorize_instance_segmentation=False,
-        # camera_params=True,
     )
 
     with rep.trigger.on_frame():

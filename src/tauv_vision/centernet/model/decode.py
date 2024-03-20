@@ -36,8 +36,19 @@ def decode(prediction: Prediction, model_config: ModelConfig,
 
     detections = []
 
+    if prediction.depth is not None:
+        depth = depth_decode(prediction.depth)
+
+    # if prediction.roll_bin is not None:
+    #     roll = angle_decode(prediction.roll_bin, prediction.roll_offset, 2 * pi, pi / 3)
+    #
+    # if prediction.pitch_bin is not None:
+    #     pitch = angle_decode(prediction.pitch_bin, prediction.pitch_offset, 2 * pi, pi / 3)
+    #
+    # if prediction.yaw_bin is not None:
+    #     yaw = angle_decode(prediction.yaw_bin, prediction.yaw_offset, 2 * pi, pi / 3)
+
     # TODO: Decode angles
-    # TODO: Decode depth
 
     for sample_i in range(batch_size):
         sample_detections = []
@@ -54,9 +65,18 @@ def decode(prediction: Prediction, model_config: ModelConfig,
                 h=float(prediction.size[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 0]),
                 w=float(prediction.size[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 1]),
             )
-            
-            # TODO: Fill in angles
-            # TODO: Fill in depth
+
+            # if prediction.depth is not None:
+            #     detection.depth = float(depth[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 0])
+            #
+            # if prediction.roll_bin is not None:
+            #     prediction.roll = float(roll[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1]])
+            #
+            # if prediction.pitch_bin is not None:
+            #     prediction.pitch = float(pitch[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1]])
+            #
+            # if prediction.yaw_bin is not None:
+            #     prediction.yaw = float(yaw[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1]])
 
             sample_detections.append(detection)
 

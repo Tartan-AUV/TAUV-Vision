@@ -30,10 +30,10 @@ train_config = TrainConfig(
     batch_size=12,
     n_batches=1000,
     n_epochs=10000,
-    loss_lambda_size=1,
+    loss_lambda_size=0.0,
     loss_lambda_offset=0.0,
-    loss_lambda_angle=0.0,
-    loss_lambda_depth=0.0,
+    loss_lambda_angle=1.0,
+    loss_lambda_depth=1.0,
     n_workers=4,
     weight_save_interval=1,
 )
@@ -41,22 +41,22 @@ train_config = TrainConfig(
 
 object_config = ObjectConfigSet(
     configs=[
-        ObjectConfig(
-            id="torpedo_22_circle",
-            yaw=AngleConfig(
-                train=True,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=True,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=None,
-            ),
-            train_depth=True,
-        ),
+        # ObjectConfig(
+        #     id="torpedo_22_circle",
+        #     yaw=AngleConfig(
+        #         train=True,
+        #         modulo=2 * pi,
+        #     ),
+        #     pitch=AngleConfig(
+        #         train=True,
+        #         modulo=2 * pi,
+        #     ),
+        #     roll=AngleConfig(
+        #         train=True,
+        #         modulo=2 * pi,
+        #     ),
+        #     train_depth=True,
+        # ),
         ObjectConfig(
             id="torpedo_22_trapezoid",
             yaw=AngleConfig(
@@ -68,8 +68,8 @@ object_config = ObjectConfigSet(
                 modulo=2 * pi,
             ),
             roll=AngleConfig(
-                train=False,
-                modulo=None,
+                train=True,
+                modulo=2 * pi,
             ),
             train_depth=True,
         ),
@@ -77,9 +77,9 @@ object_config = ObjectConfigSet(
 )
 
 train_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets/bring-great-service").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets/pay-large-president").expanduser(),
 ]
-val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/bring-great-service").expanduser()
+val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/pay-large-president").expanduser()
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
 

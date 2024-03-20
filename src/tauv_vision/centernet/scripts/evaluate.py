@@ -25,22 +25,22 @@ model_config = ModelConfig(
 
 object_config = ObjectConfigSet(
     configs=[
-        ObjectConfig(
-            id="torpedo_22_circle",
-            yaw=AngleConfig(
-                train=True,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=True,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=None,
-            ),
-            train_depth=True,
-        ),
+        # ObjectConfig(
+        #     id="torpedo_22_circle",
+        #     yaw=AngleConfig(
+        #         train=True,
+        #         modulo=2 * pi,
+        #     ),
+        #     pitch=AngleConfig(
+        #         train=True,
+        #         modulo=2 * pi,
+        #     ),
+        #     roll=AngleConfig(
+        #         train=True,
+        #         modulo=2 * pi,
+        #     ),
+        #     train_depth=True,
+        # ),
         ObjectConfig(
             id="torpedo_22_trapezoid",
             yaw=AngleConfig(
@@ -52,17 +52,17 @@ object_config = ObjectConfigSet(
                 modulo=2 * pi,
             ),
             roll=AngleConfig(
-                train=False,
-                modulo=None,
+                train=True,
+                modulo=2 * pi,
             ),
             train_depth=True,
         ),
     ]
 )
 
-test_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/bring-great-service").expanduser()
+test_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/pay-large-president").expanduser()
 
-checkpoint = pathlib.Path("~/Documents/centernet_runs/28.pt").expanduser()
+checkpoint = pathlib.Path("~/Documents/centernet_runs/55.pt").expanduser()
 
 
 def iou(d1, d2) -> bool:
@@ -112,6 +112,12 @@ def get_truth_detections(batch, model_config: ModelConfig) -> [[Detection]]:
                 h=batch.size[sample_i, detection_i, 0],
                 w=batch.size[sample_i, detection_i, 1],
             )
+
+            detection.depth = batch.depth[sample_i, detection_i]
+
+            detection.roll = batch.roll[sample_i, detection_i]
+            detection.pitch = batch.pitch[sample_i, detection_i]
+            detection.yaw = batch.yaw[sample_i, detection_i]
 
             sample_detections.append(detection)
 
@@ -190,7 +196,8 @@ def evaluate_precision_recall_curve(centernet: Centernet, model_config, data_loa
 
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     print(f"running on {device}")
 
     test_transform = A.Compose(
