@@ -13,6 +13,9 @@ import torch.nn as nn
 @dataclass
 class Prediction:
 	heatmap: torch.Tensor                      # [batch_size, n_labels, out_h, out_w]
+	keypoint_heatmap: Optional[torch.Tensor]   # [batch_size, n_keypoints, out_h, out_w]
+	keypoint_affinity: Optional[torch.Tensor]  # [batch_size, n_keypoints, 2, out_h, out_w]
+
 	size: torch.Tensor                         # [batch_size, out_h, out_w, 2]
 	offset: torch.Tensor                       # [batch_size, out_h, out_w, 2]
 
@@ -24,33 +27,6 @@ class Prediction:
 	yaw_offset: Optional[torch.Tensor]         # [batch_size, out_h, out_w, 4]
 
 	depth: Optional[torch.Tensor]              # [batch_size, out_h, out_w]
-
-
-@dataclass
-class Truth:
-	heatmap: torch.Tensor                      # [batch_size, n_labels, out_h, out_w]
-	valid: torch.Tensor                        # [batch_size, n_objects]
-	label: torch.Tensor                        # [batch_size, n_objects]
-	center: torch.Tensor                       # [batch_size, n_objects, 2]
-	size: torch.Tensor                         # [batch_size, n_objects, 2]
-
-	roll: Optional[torch.Tensor]               # [batch_size, n_objects]
-	pitch: Optional[torch.Tensor]              # [batch_size, n_objects]
-	yaw: Optional[torch.Tensor]                # [batch_size, n_objects]
-	depth: Optional[torch.Tensor]              # [batch_size, n_objects]
-
-	def to(self, device: torch.device) -> Self:
-		return Truth(
-			heatmap=self.heatmap.to(device),
-			valid=self.valid.to(device),
-			label=self.label.to(device),
-			center=self.center.to(device),
-			size=self.size.to(device),
-			roll=self.roll.to(device) if self.roll is not None else None,
-			pitch=self.pitch.to(device) if self.pitch is not None else None,
-			yaw=self.yaw.to(device) if self.yaw is not None else None,
-			depth=self.depth.to(device) if self.depth is not None else None,
-		)
 
 
 class Centernet(nn.Module):
@@ -96,8 +72,12 @@ class Centernet(nn.Module):
 		for head in self.heads:
 			out.append(head(features))
 
+		reshape_keypoint_affinity = lambda t: t.reshape(t.size(0), t.size(1) // 2, 2, t.size(2), t.size(3))
+
 		prediction = Prediction(
 			heatmap=out.pop(0),
+			keypoint_heatmap=out.pop(0) if self.object_config.train_keypoints else None,
+			keypoint_affinity=reshape_keypoint_affinity(out.pop(0)) if self.object_config.train_keypoints else None,
 			size=out.pop(0).permute(0, 2, 3, 1),
 			offset=out.pop(0).permute(0, 2, 3, 1),
 			roll_bin=out.pop(0).permute(0, 2, 3, 1) if self.object_config.train_roll else None,
@@ -132,11 +112,19 @@ def initialize_weights(module: nn.Module, excluded_modules: List[nn.Module]):
 
 
 def get_head_channels(object_config: ObjectConfigSet) -> [int]:
-	n_heatmaps = len(object_config.configs)
+	n_heatmaps = object_config.n_labels
+	n_keypoints = object_config.n_keypoints
+	n_keypoint_affinity = 2 * n_keypoints
+
+	head_channels = [n_heatmaps]
+
+	if object_config.train_keypoints:
+		head_channels.extend((n_keypoints, n_keypoint_affinity))
+
 	n_size = 2
 	n_offset = 2
 
-	head_channels = [n_heatmaps, n_size, n_offset]
+	head_channels.extend((n_size, n_offset))
 
 	n_angle_bin = 4
 	n_angle_offset = 4

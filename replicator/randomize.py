@@ -126,7 +126,7 @@ with rep.new_layer():
     def randomize_objects():
         print("creating objects")
         objects = rep.randomizer.instantiate([
-            "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final_circle.usd",
+            # "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final_circle.usd",
             "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final_trapezoid.usd",
         ], size=1, mode="reference", use_cache=True)
         print("created objects")
@@ -137,11 +137,11 @@ with rep.new_layer():
                 render_product=render_product,
                 horizontal_location=rep.distribution.uniform(-0.75, 0.75),
                 vertical_location=rep.distribution.uniform(-0.75, 0.75),
-                distance=rep.distribution.uniform(100, 400),
+                distance=rep.distribution.uniform(100, 600),
             )
 
             rep.modify.pose(
-                rotation=rep.distribution.uniform((-30, -30, -30), (30, 30, 30)),
+                rotation=rep.distribution.uniform((-60, -60, -60), (60, 60, 60)),
             )
 
         print("done randomizing objects")

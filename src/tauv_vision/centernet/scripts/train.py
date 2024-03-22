@@ -27,9 +27,13 @@ train_config = TrainConfig(
     heatmap_focal_loss_a=2,
     heatmap_focal_loss_b=4,
     heatmap_sigma_factor=0.1,
-    batch_size=12,
+    batch_size=16,
     n_batches=1000,
     n_epochs=10000,
+    loss_lambda_keypoint_heatmap=1.0,
+    loss_lambda_keypoint_affinity=0.01,
+    keypoint_heatmap_sigma=2,
+    keypoint_affinity_sigma=2,
     loss_lambda_size=0.0,
     loss_lambda_offset=0.0,
     loss_lambda_angle=1.0,
@@ -60,18 +64,25 @@ object_config = ObjectConfigSet(
         ObjectConfig(
             id="torpedo_22_trapezoid",
             yaw=AngleConfig(
-                train=True,
+                train=False,
                 modulo=2 * pi,
             ),
             pitch=AngleConfig(
-                train=True,
+                train=False,
                 modulo=2 * pi,
             ),
             roll=AngleConfig(
-                train=True,
+                train=False,
                 modulo=2 * pi,
             ),
-            train_depth=True,
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0.0, 0.1, 0.1),
+                (0.0, 0.1, -0.1),
+                (0.0, -0.1, -0.08),
+                (0.0, -0.1, 0.08),
+            ],
         ),
     ]
 )
@@ -119,6 +130,8 @@ def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, 
 
         wandb.log({"train_total_loss": losses.total})
         wandb.log({"train_heatmap_loss": losses.heatmap})
+        wandb.log({"train_keypoint_heatmap_loss": losses.keypoint_heatmap})
+        wandb.log({"train_keypoint_affinity_loss": losses.keypoint_affinity})
         wandb.log({"train_size_loss": losses.size})
         wandb.log({"train_offset_loss": losses.offset})
         wandb.log({"train_roll_loss": losses.roll})
@@ -133,7 +146,7 @@ def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, 
 def run_validation_epoch(epoch_i, centernet, data_loader, device):
     centernet.eval()
 
-    avg_losses = torch.zeros(8, dtype=torch.float32)
+    avg_losses = torch.zeros(10, dtype=torch.float32)
     n_batch = torch.zeros(1, dtype=torch.float)
 
     for batch_i, batch in enumerate(data_loader):
@@ -150,6 +163,8 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
 
             wandb.log({"val_total_loss": losses.total})
             wandb.log({"val_heatmap_loss": losses.heatmap})
+            wandb.log({"val_keypoint_heatmap_loss": losses.keypoint_heatmap})
+            wandb.log({"val_keypoint_affinity_loss": losses.keypoint_affinity})
             wandb.log({"val_size_loss": losses.size})
             wandb.log({"val_offset_loss": losses.offset})
             wandb.log({"val_roll_loss": losses.roll})
@@ -160,6 +175,8 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
             avg_losses += torch.Tensor((
                 losses.total.cpu(),
                 losses.heatmap.cpu(),
+                losses.keypoint_heatmap.cpu(),
+                losses.keypoint_affinity.cpu(),
                 losses.size.cpu(),
                 losses.offset.cpu(),
                 losses.roll.cpu(),
@@ -173,12 +190,14 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
 
     wandb.log({"val_avg_total_loss": avg_losses[0]})
     wandb.log({"val_avg_heatmap_loss": avg_losses[1]})
-    wandb.log({"val_avg_size_loss": avg_losses[2]})
-    wandb.log({"val_avg_offset_loss": avg_losses[3]})
-    wandb.log({"val_avg_roll_loss": avg_losses[4]})
-    wandb.log({"val_avg_pitch_loss": avg_losses[5]})
-    wandb.log({"val_avg_yaw_loss": avg_losses[6]})
-    wandb.log({"val_avg_depth_loss": avg_losses[7]})
+    wandb.log({"val_avg_keypoint_heatmap_loss": avg_losses[2]})
+    wandb.log({"val_avg_keypoint_affinity_loss": avg_losses[3]})
+    wandb.log({"val_avg_size_loss": avg_losses[4]})
+    wandb.log({"val_avg_offset_loss": avg_losses[5]})
+    wandb.log({"val_avg_roll_loss": avg_losses[6]})
+    wandb.log({"val_avg_pitch_loss": avg_losses[7]})
+    wandb.log({"val_avg_yaw_loss": avg_losses[8]})
+    wandb.log({"val_avg_depth_loss": avg_losses[9]})
 
 
 def main():
@@ -196,10 +215,10 @@ def main():
     train_transform = A.Compose(
         [
             A.ColorJitter(
-                brightness=0.1,
-                contrast=0.1,
-                saturation=0.1,
-                hue=0.1,
+                brightness=0.3,
+                contrast=0.3,
+                saturation=0.3,
+                hue=1.0,
                 always_apply=True,
             ),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.3, 0.3, 0.3), always_apply=True)
@@ -212,7 +231,6 @@ def main():
         ]
     )
 
-
     dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels, model_config.downsamples)
     centernet = Centernet(dla_backbone, object_config).to(device)
 
@@ -222,11 +240,11 @@ def main():
     optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-3)
 
     train_datasets = [
-        PoseDataset(dataset_root, Split.TRAIN, object_config.label_id_to_index, train_transform)
+        PoseDataset(dataset_root, Split.TRAIN, object_config.label_id_to_index, object_config, train_transform)
         for dataset_root in train_dataset_roots
     ]
     train_dataset = ConcatDataset(train_datasets)
-    val_dataset = PoseDataset(val_dataset_root, Split.VAL, object_config.label_id_to_index, val_transform)
+    val_dataset = PoseDataset(val_dataset_root, Split.VAL, object_config.label_id_to_index, object_config, val_transform)
 
     train_dataloader = DataLoader(
         train_dataset,

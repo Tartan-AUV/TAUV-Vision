@@ -1,12 +1,15 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from dataclasses import dataclass
+import numpy as np
+import cv2
 
 import torch
-from math import pi
+from math import pi, atan2
 import torch.nn.functional as F
+from spatialmath import SE3, SO3
 
-from tauv_vision.centernet.model.centernet import Prediction, Truth
-from tauv_vision.centernet.model.config import ModelConfig
+from tauv_vision.centernet.model.centernet import Prediction
+from tauv_vision.centernet.model.config import ModelConfig, ObjectConfigSet
 
 
 @dataclass
@@ -23,6 +26,123 @@ class Detection:
     roll: Optional[float] = None
 
     depth: Optional[float] = None
+
+
+@dataclass
+class KeypointDetection:
+    label: int
+    score: float
+
+    y: float
+    x: float
+
+    keypoints: List[Optional[Tuple[float, float, float]]]
+    keypoint_scores: List[Optional[float]]
+    keypoint_affinities: List[Optional[Tuple[float, float, float]]]
+
+    cam_t_object: SE3
+
+
+def decode_keypoints(prediction: Prediction,
+                     model_config: ModelConfig, object_config: ObjectConfigSet,
+                     M_projection: np.array,
+                     n_detections: int, keypoint_n_detections: int,
+                     score_threshold: float, keypoint_score_threshold: float, keypoint_angle_threshold: float) -> [[KeypointDetection]]:
+    heatmap = F.sigmoid(prediction.heatmap)
+    heatmap = heatmap_nms(heatmap, kernel_size=3)
+    detected_index, detected_label, detected_score = heatmap_detect(heatmap, n_detections)
+
+    keypoint_heatmap = F.sigmoid(prediction.keypoint_heatmap)
+    keypoint_heatmap = heatmap_nms(keypoint_heatmap, kernel_size=3)
+    detected_keypoint_index, detected_keypoint_label, detected_keypoint_score = heatmap_detect(keypoint_heatmap, keypoint_n_detections)
+
+    batch_size = detected_index.shape[0]
+
+    detections = []
+
+    for sample_i in range(batch_size):
+        sample_detections = []
+
+        for detection_i in range(n_detections):
+            if detected_score[sample_i, detection_i] < score_threshold:
+                break
+
+            label = int(detected_label[sample_i, detection_i])
+
+            config = object_config.configs[label]
+
+            n_keypoints = len(config.keypoints)
+
+            detection = KeypointDetection(
+                label=label,
+                score=float(detected_score[sample_i, detection_i]),
+                y=float(detected_index[sample_i, detection_i, 0] / model_config.out_h),
+                x=float(detected_index[sample_i, detection_i, 1] / model_config.out_w),
+                keypoints=[None] * n_keypoints,
+                keypoint_scores=[None] * n_keypoints,
+                keypoint_affinities=[None] * n_keypoints,
+                cam_t_object=None,
+            )
+
+            sample_detections.append(detection)
+
+        for keypoint_i in range(keypoint_n_detections):
+            keypoint_score = float(detected_keypoint_score[sample_i, keypoint_i])
+            if keypoint_score < keypoint_score_threshold:
+                break
+
+            keypoint_label = int(detected_keypoint_label[sample_i, keypoint_i])
+
+            object_index, object_keypoint_index = object_config.decode_keypoint_index(keypoint_label)
+
+            candidate_detections = [
+                detection for detection in sample_detections
+                if detection.label == object_index and detection.keypoints[object_keypoint_index] is None
+            ]
+
+            if len(candidate_detections) == 0:
+                continue
+
+            keypoint_y_index = detected_keypoint_index[sample_i, keypoint_i, 0]
+            keypoint_x_index = detected_keypoint_index[sample_i, keypoint_i, 1]
+            keypoint_y = float(keypoint_y_index / model_config.out_h)
+            keypoint_x = float(keypoint_x_index / model_config.out_w)
+            keypoint_affinity_y = float(prediction.keypoint_affinity[sample_i, keypoint_label, 0, keypoint_y_index, keypoint_x_index])
+            keypoint_affinity_x = float(prediction.keypoint_affinity[sample_i, keypoint_label, 1, keypoint_y_index, keypoint_x_index])
+
+            keypoint_affinity_angle = atan2(keypoint_affinity_y, keypoint_affinity_x)
+
+            candidate_detection_angle_errors = [
+                abs(keypoint_affinity_angle - atan2(keypoint_y - detection.y, keypoint_x - detection.x))
+                for detection in candidate_detections
+            ]
+
+            match_detection = candidate_detections[candidate_detection_angle_errors.index(min(candidate_detection_angle_errors))]
+
+            match_detection.keypoints[object_keypoint_index] = (keypoint_y, keypoint_x)
+            match_detection.keypoint_affinities[object_keypoint_index] = (keypoint_affinity_y, keypoint_affinity_x)
+            match_detection.keypoint_scores[object_keypoint_index] = keypoint_score
+
+        for detection in sample_detections:
+            if any([keypoint is None for keypoint in detection.keypoints]):
+                continue
+
+            object_label = detection.label
+
+            keypoints_img = np.flip(np.array(detection.keypoints), axis=1)
+            keypoints_img_px = keypoints_img * np.array([model_config.in_w, model_config.in_h])
+            keypoints_cam = np.array(object_config.configs[object_label].keypoints)
+
+            success, rvec, tvec = cv2.solvePnP(keypoints_cam, keypoints_img_px, M_projection, None)
+
+            if success:
+                rotm, _ = cv2.Rodrigues(rvec)
+
+                match_detection.cam_t_object = SE3.Rt(SO3(rotm), tvec)
+
+        detections.append(sample_detections)
+
+    return detections
 
 
 def decode(prediction: Prediction, model_config: ModelConfig,

@@ -1,4 +1,4 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 
 from dataclasses import dataclass
 
@@ -40,6 +40,11 @@ class TrainConfig:
     heatmap_focal_loss_b: float
     heatmap_sigma_factor: float
 
+    keypoint_heatmap_sigma: float
+    keypoint_affinity_sigma: float
+
+    loss_lambda_keypoint_heatmap: float
+    loss_lambda_keypoint_affinity: float
     loss_lambda_size: float
     loss_lambda_offset: float
     loss_lambda_angle: float
@@ -66,11 +71,32 @@ class ObjectConfig:
 
     train_depth: bool
 
+    train_keypoints: bool
+
+    keypoints: Optional[List[Tuple[float, float, float]]]
+
 
 class ObjectConfigSet:
 
     def __init__(self, configs: [ObjectConfig]):
         self.configs: [ObjectConfig] = configs
+
+        keypoint_index_encode: Dict[Tuple[int, int], int] = {}
+        keypoint_index_decode: Dict[int, Tuple[int, int]] = {}
+
+        keypoint_index = 0
+        for object_index, config in enumerate(self.configs):
+            if config.keypoints is None:
+                continue
+
+            for object_keypoint_index, _ in enumerate(config.keypoints):
+                keypoint_index_encode[(object_index, object_keypoint_index)] = keypoint_index
+                keypoint_index_decode[keypoint_index] = (object_index, object_keypoint_index)
+
+                keypoint_index += 1
+
+        self._keypoint_index_encode = keypoint_index_encode
+        self._keypoint_index_decode = keypoint_index_decode
 
     @property
     def train_yaw(self) -> bool:
@@ -89,9 +115,26 @@ class ObjectConfigSet:
         return any([config.train_depth for config in self.configs])
 
     @property
+    def train_keypoints(self) -> bool:
+        return any([config.train_keypoints for config in self.configs])
+
+    @property
     def n_labels(self) -> int:
         return len(self.configs)
 
     @property
+    def n_keypoints(self) -> int:
+        return sum([len(config.keypoints) if config.keypoints is not None else 0 for config in self.configs])
+
+    @property
     def label_id_to_index(self) -> Dict[str, int]:
         return {config.id: i for (i, config) in enumerate(self.configs)}
+
+    def encode_keypoint_index(self, object_index: int, object_keypoint_index: int) -> int:
+        return self._keypoint_index_encode[(object_index, object_keypoint_index)]
+
+    def decode_keypoint_index(self, keypoint_index) -> Tuple[int, int]:
+        return self._keypoint_index_decode[keypoint_index]
+
+    def get_by_label(self, label: str) -> ObjectConfig:
+        return self.configs[self.label_id_to_index[label]]

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from enum import Enum
 from dataclasses import dataclass
 
-from tauv_vision.centernet.model.centernet import Prediction, Truth
+from tauv_vision.centernet.model.centernet import Prediction
 from tauv_vision.centernet.model.decode import angle_get_bins
 from tauv_vision.centernet.model.config import ModelConfig, TrainConfig, ObjectConfig, ObjectConfigSet, AngleConfig
 from tauv_vision.datasets.load.pose_dataset import PoseSample
@@ -14,6 +14,8 @@ from tauv_vision.datasets.load.pose_dataset import PoseSample
 class Losses:
     total: torch.Tensor = torch.zeros(1)
     heatmap: torch.Tensor = torch.zeros(1)
+    keypoint_heatmap: torch.Tensor = torch.zeros(1)
+    keypoint_affinity: torch.Tensor = torch.zeros(1)
     offset: torch.Tensor = torch.zeros(1)
     size: torch.Tensor = torch.zeros(1)
     roll: torch.Tensor = torch.zeros(1)
@@ -23,7 +25,6 @@ class Losses:
 
     avg_size_error: torch.Tensor = torch.zeros(1)
     max_size_error: torch.Tensor = torch.zeros(1)
-
 
 
 def generate_heatmap(truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> torch.Tensor:
@@ -69,6 +70,69 @@ def generate_heatmap(truth: PoseSample, model_config: ModelConfig, train_config:
     return heatmap
 
 
+def generate_keypoint_heatmap(truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> torch.Tensor:
+    # result is [batch_size, n_labels, out_h, out_w]
+
+    batch_size, n_keypoint_instances = truth.keypoint_valid.shape
+    n_keypoints = object_config.n_keypoints
+    out_h = model_config.out_h
+    out_w = model_config.out_w
+
+    heatmap = torch.zeros((batch_size, n_keypoints, out_h, out_w), dtype=torch.float32, device=truth.valid.device)
+    affinity_weight = torch.zeros((batch_size, n_keypoints, out_h, out_w), dtype=torch.float32, device=truth.valid.device)
+    affinity = torch.zeros((batch_size, n_keypoints, 2, out_h, out_w), dtype=torch.float32, device=truth.valid.device)
+
+    distance = torch.full((batch_size, n_keypoints, out_h, out_w), fill_value=torch.inf, dtype=torch.float32, device=truth.valid.device)
+
+    y = torch.arange(0, out_h, device=truth.valid.device)
+    x = torch.arange(0, out_w, device=truth.valid.device)
+
+    y, x = torch.meshgrid(y, x, indexing="ij")
+
+    for sample_i in range(batch_size):
+        for keypoint_instance_i in range(n_keypoint_instances):
+            if not truth.keypoint_valid[sample_i, keypoint_instance_i]:
+                continue
+
+            keypoint_i = truth.keypoint_label[sample_i, keypoint_instance_i]
+
+            cy = floor(truth.keypoint_center[sample_i, keypoint_instance_i, 0] * model_config.in_h / model_config.downsample_ratio)
+            cx = floor(truth.keypoint_center[sample_i, keypoint_instance_i, 1] * model_config.in_w / model_config.downsample_ratio)
+
+            heatmap[sample_i, keypoint_i] = torch.maximum(
+                heatmap[sample_i, keypoint_i],
+                torch.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * train_config.keypoint_heatmap_sigma ** 2))
+            )
+
+            affinity_weight[sample_i, keypoint_i] = torch.maximum(
+                affinity_weight[sample_i, keypoint_i],
+                torch.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * train_config.keypoint_affinity_sigma ** 2))
+            )
+
+            keypoint_displacement = torch.stack((y / model_config.out_h, x / model_config.out_w), dim=0) - truth.center[sample_i, truth.keypoint_object_index[sample_i, keypoint_instance_i]].unsqueeze(1).unsqueeze(2)
+
+            keypoint_displacement = torch.nan_to_num(keypoint_displacement, 0)
+
+            keypoint_distance = torch.nan_to_num(torch.sqrt(keypoint_displacement[0] ** 2 + keypoint_displacement[1] ** 2), 1)
+
+            keypoint_affinity = keypoint_displacement / keypoint_distance
+
+            affinity[sample_i, keypoint_i] = torch.where(
+                keypoint_distance < distance[sample_i, keypoint_i],
+                keypoint_affinity,
+                affinity[sample_i, keypoint_i],
+            )
+
+            distance[sample_i, keypoint_i] = torch.min(distance[sample_i, keypoint_i], keypoint_distance)
+
+    # TODO: get rid of this, this really shouldn't be necessary
+    heatmap = torch.nan_to_num(heatmap)
+    affinity_weight = torch.nan_to_num(affinity_weight)
+    affinity = torch.nan_to_num(affinity)
+
+    return heatmap, affinity_weight, affinity
+
+
 def out_index_for_position(position: torch.Tensor, model_config: ModelConfig) -> torch.Tensor:
     return (position / model_config.downsample_ratio).to(torch.long)
 
@@ -110,8 +174,10 @@ def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, t
 
     losses = Losses()
 
-    # TODO: Generate heatmap here based on truth
     heatmap = generate_heatmap(truth, model_config, train_config, object_config)
+
+    if prediction.keypoint_heatmap is not None:
+        keypoint_heatmap, keypoint_affinity_weight, keypoint_affinity = generate_keypoint_heatmap(truth, model_config, train_config, object_config)
 
     out_index = out_index_for_position(truth.center, model_config) # [batch_size, n_objects, 2]
 
@@ -157,12 +223,24 @@ def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, t
             if prediction.depth is not None:
                 prediction_depth[sample_i, object_i] = prediction.depth[sample_i, out_index[sample_i, object_i, 0], out_index[sample_i, object_i, 1]]
 
-    n_valid = truth.valid.to(torch.float32).sum()
+    n_valid = min(int(truth.valid.to(torch.float32).sum()), 1)
 
     l_heatmap = focal_loss(F.sigmoid(prediction.heatmap), heatmap, alpha=train_config.heatmap_focal_loss_a, beta=train_config.heatmap_focal_loss_b)
     l_heatmap = l_heatmap.sum()
     losses.heatmap = l_heatmap
     l = l_heatmap
+
+    if prediction.keypoint_heatmap is not None:
+        l_keypoint_heatmap = focal_loss(F.sigmoid(prediction.keypoint_heatmap), keypoint_heatmap, alpha=train_config.heatmap_focal_loss_a, beta=train_config.heatmap_focal_loss_b)
+        l_keypoint_heatmap = train_config.loss_lambda_keypoint_heatmap * l_keypoint_heatmap.sum()
+        losses.keypoint_heatmap = l_keypoint_heatmap
+        l += l_keypoint_heatmap
+
+    if prediction.keypoint_affinity is not None:
+        l_keypoint_affinity = F.mse_loss(prediction.keypoint_affinity, keypoint_affinity, reduction="none")
+        l_keypoint_affinity = train_config.loss_lambda_keypoint_affinity * (keypoint_affinity_weight.unsqueeze(2) * l_keypoint_affinity).sum()
+        losses.keypoint_affinity = l_keypoint_affinity
+        l += l_keypoint_affinity
 
     # truth_pixel_size = truth.size * torch.Tensor((model_config.in_h, model_config.in_w)).to(truth.size.device).unsqueeze(0).unsqueeze(1)
     l_size = F.l1_loss(prediction_size, truth.size, reduction="none")

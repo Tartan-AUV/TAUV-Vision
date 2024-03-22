@@ -12,6 +12,8 @@ from PIL import Image
 import torchvision.transforms.v2 as T
 import torch.nn.functional as F
 
+from tauv_vision.centernet.model.config import ObjectConfigSet
+
 
 class Split(Enum):
     TRAIN = "train"
@@ -33,6 +35,11 @@ class PoseSample:
     yaw: Optional[torch.Tensor]  # [batch_size, n_objects]
     depth: Optional[torch.Tensor]  # [batch_size, n_objects]
 
+    keypoint_valid: Optional[torch.Tensor]        # [batch_size, n_keypoint_instances]
+    keypoint_label: Optional[torch.Tensor]        # [batch_size, n_keypoint_instances]
+    keypoint_center: Optional[torch.Tensor]       # [batch_size, n_keypoint_instances, 2]
+    keypoint_object_index: Optional[torch.Tensor] # [batch_size, n_keypoint_instances]
+
     def to(self, device: torch.device) -> Self:
         return PoseSample(
             img=self.img.to(device),
@@ -44,10 +51,14 @@ class PoseSample:
             pitch=self.pitch.to(device) if self.pitch is not None else None,
             yaw=self.yaw.to(device) if self.yaw is not None else None,
             depth=self.depth.to(device) if self.depth is not None else None,
+            keypoint_valid=self.keypoint_valid.to(device) if self.keypoint_valid is not None else None,
+            keypoint_label=self.keypoint_label.to(device) if self.keypoint_label is not None else None,
+            keypoint_center=self.keypoint_center.to(device) if self.keypoint_center is not None else None,
+            keypoint_object_index=self.keypoint_object_index.to(device) if self.keypoint_object_index is not None else None,
         )
 
     @classmethod
-    def load(cls, data_path: pathlib.Path, id: str, label_id_to_index: Dict[str, int], transform) -> Self:
+    def load(cls, data_path: pathlib.Path, id: str, label_id_to_index: Dict[str, int], object_config: ObjectConfigSet, transform) -> Self:
         json_path = (data_path / id).with_suffix(".json")
         img_path = (data_path / id).with_suffix(".png")
 
@@ -76,6 +87,12 @@ class PoseSample:
 
         n_objects = len(filtered_objects)
 
+        filtered_object_configs = [object_config.get_by_label(object["label"]) for object in filtered_objects]
+
+        n_keypoint_instances = sum([
+            len(object.keypoints) if object.train_keypoints else 0 for object in filtered_object_configs
+        ])
+
         valid = torch.full((n_objects,), fill_value=True, dtype=torch.bool)
 
         label = torch.zeros(n_objects, dtype=torch.long)
@@ -87,8 +104,18 @@ class PoseSample:
         yaw = torch.zeros(n_objects, dtype=torch.float32)
         depth = torch.zeros(n_objects, dtype=torch.float32)
 
+        keypoint_valid = torch.full((n_keypoint_instances,), fill_value=True, dtype=torch.bool)
+        keypoint_label = torch.zeros(n_keypoint_instances, dtype=torch.long)
+        keypoint_center = torch.zeros((n_keypoint_instances, 2), dtype=torch.float32)
+        keypoint_object_index = torch.zeros(n_keypoint_instances, dtype=torch.long)
+
+        keypoint_instance_i = 0
+
+        M_projection = torch.Tensor(data["camera"]["projection"]).reshape(3, 4)
+
         for i, object in enumerate(filtered_objects):
-            label[i] = label_id_to_index[object["label"]]
+            object_index = label_id_to_index[object["label"]]
+            label[i] = object_index
 
             center[i, 0] = object["bbox"]["y"]
             center[i, 1] = object["bbox"]["x"]
@@ -101,6 +128,25 @@ class PoseSample:
             yaw[i] = object["pose"]["yaw"]
             depth[i] = object["pose"]["distance"]
 
+            M_cam_t_object = torch.Tensor(object["pose"]["cam_t_object"]).reshape(4, 4)
+
+            config = filtered_object_configs[i]
+
+            if config.keypoints is not None:
+                for object_keypoint_index, object_keypoint in enumerate(config.keypoints):
+                    keypoint_label[keypoint_instance_i] = object_config.encode_keypoint_index(object_index, object_keypoint_index)
+                    keypoint_object_index[keypoint_instance_i] = i
+
+                    keypoint_object_h = torch.Tensor([object_keypoint[0], object_keypoint[1], object_keypoint[2], 1])
+                    keypoint_cam_h = torch.matmul(M_cam_t_object, keypoint_object_h)
+                    keypoint_cam_2d_h = torch.matmul(M_projection, keypoint_cam_h)
+                    keypoint_cam_2d = keypoint_cam_2d_h[:2] / keypoint_cam_2d_h[2]
+
+                    keypoint_center[keypoint_instance_i, 0] = keypoint_cam_2d[1] / data["camera"]["h"]
+                    keypoint_center[keypoint_instance_i, 1] = keypoint_cam_2d[0] / data["camera"]["w"]
+
+                    keypoint_instance_i += 1
+
         sample = PoseSample(
             img=img.unsqueeze(0),
             valid=valid.unsqueeze(0),
@@ -111,6 +157,10 @@ class PoseSample:
             pitch=pitch.unsqueeze(0),
             yaw=yaw.unsqueeze(0),
             depth=depth.unsqueeze(0),
+            keypoint_valid=keypoint_valid.unsqueeze(0),
+            keypoint_label=keypoint_label.unsqueeze(0),
+            keypoint_center=keypoint_center.unsqueeze(0),
+            keypoint_object_index=keypoint_object_index.unsqueeze(0),
         )
 
         return sample
@@ -119,6 +169,9 @@ class PoseSample:
     def collate(cls, samples: [Self]) -> Self:
         n_detections = [sample.valid.size(1) for sample in samples]
         max_n_detections = max(n_detections)
+
+        n_keypoint_instances = [sample.keypoint_valid.size(1) for sample in samples]
+        max_n_keypoint_instances = max(n_keypoint_instances)
 
         img = torch.cat([sample.img for sample in samples], dim=0)
 
@@ -155,6 +208,23 @@ class PoseSample:
             for sample in samples
         ], dim=0)
 
+        keypoint_valid = torch.cat([
+            F.pad(sample.keypoint_valid, (0, max_n_keypoint_instances - sample.keypoint_valid.size(1)), value=0)
+            for sample in samples
+        ], dim=0)
+        keypoint_object_index = torch.cat([
+            F.pad(sample.keypoint_object_index, (0, max_n_keypoint_instances - sample.keypoint_object_index.size(1)), value=0)
+            for sample in samples
+        ], dim=0)
+        keypoint_label = torch.cat([
+            F.pad(sample.keypoint_label, (0, max_n_keypoint_instances - sample.keypoint_label.size(1)), value=0)
+            for sample in samples
+        ], dim=0)
+        keypoint_center = torch.cat([
+            F.pad(sample.keypoint_center, (0, 0, 0, max_n_keypoint_instances - sample.keypoint_center.size(1)), value=0)
+            for sample in samples
+        ], dim=0)
+
         result = PoseSample(
             img=img,
             valid=valid,
@@ -165,6 +235,10 @@ class PoseSample:
             pitch=pitch,
             yaw=yaw,
             depth=depth,
+            keypoint_valid=keypoint_valid,
+            keypoint_object_index=keypoint_object_index,
+            keypoint_label=keypoint_label,
+            keypoint_center=keypoint_center,
         )
 
         return result
@@ -172,7 +246,7 @@ class PoseSample:
 
 class PoseDataset(Dataset):
 
-    def __init__(self, root: pathlib.Path, split: Split, label_id_to_index: Dict[str, int], transform):
+    def __init__(self, root: pathlib.Path, split: Split, label_id_to_index: Dict[str, int], object_config: ObjectConfigSet, transform):
         super().__init__()
 
         self._root_path: pathlib.Path = root
@@ -191,13 +265,15 @@ class PoseDataset(Dataset):
 
         self._label_id_to_index: Dict[str, int] = label_id_to_index
 
+        self._object_config = object_config
+
         self._transform = transform
 
     def __len__(self) -> int:
         return len(self._ids)
 
     def __getitem__(self, i: int):
-        return PoseSample.load(self._data_path, self._ids[i], self._label_id_to_index, self._transform)
+        return PoseSample.load(self._data_path, self._ids[i], self._label_id_to_index, self._object_config, self._transform)
 
     def _get_ids(self) -> [str]:
         splits_json_path = self._root_path / "splits.json"
