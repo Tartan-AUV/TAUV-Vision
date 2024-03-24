@@ -9,8 +9,11 @@ import re
 import json
 import numpy as np
 from typing import Dict
+from functools import partial
+from multiprocessing import Pool
+import matplotlib.pyplot as plt
 
-from yolo_pose.datasets.segmentation_dataset.segmentation_dataset import SegmentationSample
+from tauv_vision.datasets.segmentation_dataset.segmentation_dataset import SegmentationSample
 
 
 def get_id(path: pathlib.Path) -> str:
@@ -37,14 +40,30 @@ def post_process(rgb_path: pathlib.Path, background_path: pathlib.Path,
     bbox_classification_path = (in_dir / f"bounding_box_2d_loose_labels_{id}").with_suffix(".json")
     bbox_instance_path = (in_dir / f"bounding_box_2d_loose_prim_paths_{id}").with_suffix(".json")
 
+    depth_path = (in_dir / f"distance_to_camera_{id}").with_suffix(".npy")
+
     img_pil = Image.open(rgb_path)
     background_pil = Image.open(background_path)
     seg_pil = Image.open(seg_path)
     seg_raw = T.ToTensor()(seg_pil)
+    depth_np = np.load(depth_path)
 
-    background_pil.paste(img_pil, (0, 0), img_pil)
+    background_np = np.array(background_pil).astype(np.float32) / 255
+    img_np = np.array(img_pil)
+    img_rgb_np = img_np[:, :, 0:3].astype(np.float32) / 255
+    img_a_np = img_np[:, :, 3].astype(np.float32) / 255
 
-    img = T.ToTensor()(background_pil)
+    background_lighting_np = np.array([np.mean(background_np[:, :, 0]), np.mean(background_np[:, :, 1]), np.mean(background_np[:, :, 2])]) + np.random.uniform(-0.05, 0.05, (3,))
+    beta = np.random.uniform(0.1, 0.2)
+
+    transmission_np = np.maximum(np.exp(-beta * depth_np), 0.1)
+    img_rgb_adj_np = np.expand_dims(transmission_np, 2) * img_rgb_np + np.expand_dims(1 - transmission_np, 2) * background_lighting_np
+
+    composite_np = np.expand_dims(img_a_np, 2) * img_rgb_adj_np + np.expand_dims(1 - img_a_np, 2) * background_np
+
+    composite_pil = Image.fromarray((composite_np * 255).astype(np.uint8), "RGB")
+
+    img = T.ToTensor()(composite_pil)
 
     w, h = img_pil.size
 
@@ -60,11 +79,15 @@ def post_process(rgb_path: pathlib.Path, background_path: pathlib.Path,
 
     seg_instances = {v: k for k, v in seg_instances.items()}
 
-    valid = torch.full((n_detections,), fill_value=True, dtype=torch.bool)
-    classifications = torch.zeros(n_detections, dtype=torch.long)
-    bounding_boxes = torch.zeros((n_detections, 4), dtype=torch.float)
+    # valid = torch.full((n_detections,), fill_value=True, dtype=torch.bool)
+    # classifications = torch.zeros(n_detections, dtype=torch.long)
+    # bounding_boxes = torch.zeros((n_detections, 4), dtype=torch.float)
+    valid = []
+    classifications = []
+    bounding_boxes = []
     seg = torch.full((h, w), fill_value=255, dtype=torch.uint8)
 
+    detection_i = 0
     for i in range(len(bboxes)):
         bbox_class, x0, y0, x1, y1, _ = bboxes[i]
 
@@ -76,16 +99,26 @@ def post_process(rgb_path: pathlib.Path, background_path: pathlib.Path,
 
         bbox_class_name = bbox_classifications[str(bbox_class)]["class"].split(",")[-1]
 
+        if bbox_class_name not in class_names:
+            continue
+
         class_id = class_names[bbox_class_name]
 
-        classifications[i] = class_id
-        bounding_boxes[i] = torch.Tensor([bbox_y, bbox_x, bbox_h, bbox_w])
+        valid.append(True)
+        classifications.append(class_id)
+        bounding_boxes.append([bbox_y, bbox_x, bbox_h, bbox_w])
 
         if bbox_instances[i] in seg_instances:
             seg_value = parse_seg_value(seg_instances[bbox_instances[i]])
             seg_mask = seg_raw == (torch.Tensor(seg_value).unsqueeze(1).unsqueeze(2) / 255)
 
-        seg[seg_mask[0] & seg_mask[1] & seg_mask[2] & seg_mask[3]] = i
+            seg[seg_mask[0] & seg_mask[1] & seg_mask[2] & seg_mask[3]] = detection_i
+
+        detection_i += 1
+
+    valid = torch.Tensor(valid).to(torch.bool)
+    classifications = torch.Tensor(classifications).to(torch.long)
+    bounding_boxes = torch.Tensor(bounding_boxes).to(torch.float)
 
     sample = SegmentationSample(
         img=img,
@@ -98,6 +131,11 @@ def post_process(rgb_path: pathlib.Path, background_path: pathlib.Path,
     out_id = id.zfill(8)
     sample.save(out_dir, out_id)
 
+def f(rgb_path, background_paths, in_dir, background_dir, out_dir, class_names):
+    background_path = random.choice(background_paths)
+    post_process(rgb_path, background_path, in_dir, background_dir, out_dir, class_names)
+
+
 def run(in_dir: pathlib.Path, background_dir: pathlib.Path, out_dir: pathlib.Path):
     rgb_paths = glob.glob("rgb_*.png", root_dir=in_dir)
     rgb_paths = [in_dir / rgb_path for rgb_path in rgb_paths]
@@ -106,11 +144,14 @@ def run(in_dir: pathlib.Path, background_dir: pathlib.Path, out_dir: pathlib.Pat
     background_paths = [background_dir / background_path for background_path in background_paths]
 
     # TODO: READ CLASS NAMES
-    class_names = {"torpedo_target": 0, "torpedo_target_open": 1, "torpedo_target_closed": 2}
+    class_names = {"torpedo_22_circle": 0, "torpedo_22_trapezoid": 1}
 
-    for rgb_path in rgb_paths:
-        background_path = random.choice(background_paths)
-        post_process(rgb_path, background_path, in_dir, background_dir, out_dir, class_names)
+    # for rgb_path in rgb_paths:
+    #     f(rgb_path, background_paths, in_dir, background_dir, out_dir, class_names)
+
+    with Pool() as pool:
+        f_partial = partial(f, background_paths=background_paths, in_dir=in_dir, background_dir=background_dir, out_dir=out_dir, class_names=class_names)
+        pool.map(f_partial, rgb_paths)
 
 
 def main():
