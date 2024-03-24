@@ -51,13 +51,13 @@ object_config = ObjectConfigSet(
     ]
 )
 
-checkpoint = pathlib.Path("~/Documents/centernet_runs/3.pt").expanduser()
+checkpoint = pathlib.Path("~/Documents/centernet_runs/2.pt").expanduser()
 
 in_video = pathlib.Path("~/Documents/torpedo_22_2.mp4").expanduser()
 out_video = pathlib.Path("~/Documents/torpedo_22_2_out.mp4").expanduser()
 
 def main():
-    device = torch.device("cuda")
+    device = torch.device("cpu")
 
     dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels, model_config.downsamples)
     centernet = Centernet(dla_backbone, object_config).to(device)
@@ -105,23 +105,26 @@ def main():
 
         img = to_tensor(img_np).unsqueeze(0).to(device)
 
-        prediction = centernet.forward(img)
+        with torch.no_grad():
+            prediction = centernet.forward(img)
 
         detections = decode_keypoints(
             prediction,
             model_config,
             object_config,
             M_projection,
-            n_detections=100,
-            keypoint_n_detections=100,
-            score_threshold=0.1,
-            keypoint_score_threshold=0.1,
+            n_detections=10,
+            keypoint_n_detections=10,
+            score_threshold=0.5,
+            keypoint_score_threshold=0.5,
             keypoint_angle_threshold=0.5,
         )[0]
 
         print(len(detections))
 
         for detection in detections:
+            cv2.circle(frame, (int(detection.x * 640), int(detection.y * 360)), 3, (255, 0, 0), -1)
+
             if detection.cam_t_object is None:
                 continue
 

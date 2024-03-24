@@ -82,7 +82,7 @@ class PoseSample:
 
         filtered_objects = [
             object for object in data["objects"]
-            if object["label"] in label_id_to_index and object["bbox"]["h"] > 0.01 and object["bbox"]["w"] > 0.01
+            if object["label"] in label_id_to_index # and object["bbox"]["h"] > 0.01 and object["bbox"]["w"] > 0.01
         ]
 
         n_objects = len(filtered_objects)

@@ -6,13 +6,11 @@ import carb.settings
 # ~/.local/share/ov/pkg/code-2022.3.3/omni.code.sh --no-window --/omni/replicator/script=/home/theo/Documents/yolo_pose/replicator/randomize.py
 
 # Camera params fails if this is turned on
-# rep.settings.set_render_pathtraced(16)
-
 NUM_FRAMES = 10000
 
 SCENE_PRIM_PREFIX = "/Replicator/Ref_Xform/Ref"
 
-carb.settings.get_settings().set("/omni/replicator/RTSubframes", 8)
+# carb.settings.get_settings().set("/omni/replicator/RTSubframes", 8)
 
 with rep.new_layer():
     scene = rep.create.from_usd("/home/theo/Documents/yolo_pose/models/underwater_scene_1/underwater_scene_1.usd")
@@ -128,6 +126,7 @@ with rep.new_layer():
         objects = rep.randomizer.instantiate([
             # "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final_circle.usd",
             "/home/theo/Documents/yolo_pose/models/torpedo_22/usd/torpedo_22_bootlegger_final_trapezoid.usd",
+            # "/home/theo/Documents/yolo_pose/models/buoy_23/usd/buoy_23_1_final.usd",
         ], size=1, mode="reference", use_cache=True)
         print("created objects")
 
@@ -137,11 +136,11 @@ with rep.new_layer():
                 render_product=render_product,
                 horizontal_location=rep.distribution.uniform(-0.75, 0.75),
                 vertical_location=rep.distribution.uniform(-0.75, 0.75),
-                distance=rep.distribution.uniform(100, 600),
+                distance=rep.distribution.uniform(100, 1000),
             )
 
             rep.modify.pose(
-                rotation=rep.distribution.uniform((-60, -60, -60), (60, 60, 60)),
+                rotation=rep.distribution.uniform((-15, -15, -15), (15, 15, 15)),
             )
 
         print("done randomizing objects")
@@ -180,6 +179,22 @@ with rep.new_layer():
         rep.randomizer.randomize_objects()
 
     async def run():
+        await rep.orchestrator.step_async()
+
+        camera_params_data = camera_params_annot.get_data()
+        print(f"camera_params_data: {camera_params_data}")
+
+        print("writing camera params!")
+
+        basic_writer.write({
+            "trigger_outputs": {"on_time": 0},
+            "camera_params": camera_params_data,
+        })
+
+        print("wrote camera params")
+
+        rep.settings.set_render_pathtraced(16)
+
         for i in range(NUM_FRAMES):
             print(f"waiting...")
             sys.stdout.flush()
@@ -198,8 +213,8 @@ with rep.new_layer():
             instance_seg_data = instance_seg_annot.get_data()
             print(f"instance_seg_data: {instance_seg_data}")
 
-            camera_params_data = camera_params_annot.get_data()
-            print(f"camera_params_data: {camera_params_data}")
+            # camera_params_data = camera_params_annot.get_data()
+            # print(f"camera_params_data: {camera_params_data}")
 
             basic_writer.write({
                 "trigger_outputs": {"on_time": 0},
@@ -207,7 +222,7 @@ with rep.new_layer():
                 "bounding_box_2d_tight": bbox_data,
                 "bounding_box_3d": bbox3d_data,
                 "instance_segmentation": instance_seg_data,
-                "camera_params": camera_params_data,
+                # "camera_params": camera_params_data,
             })
 
     asyncio.ensure_future(run())

@@ -50,10 +50,11 @@ def generate_heatmap(truth: PoseSample, model_config: ModelConfig, train_config:
             cy = floor(truth.center[sample_i, object_i, 0] * model_config.in_h / model_config.downsample_ratio)
             cx = floor(truth.center[sample_i, object_i, 1] * model_config.in_w / model_config.downsample_ratio)
 
-            h = float(truth.size[sample_i, object_i, 0] * model_config.in_h)
-            w = float(truth.size[sample_i, object_i, 1] * model_config.in_w)
+            # h = float(truth.size[sample_i, object_i, 0] * model_config.in_h)
+            # w = float(truth.size[sample_i, object_i, 1] * model_config.in_w)
 
-            sigma = train_config.heatmap_sigma_factor * (h + w) / 2
+            # sigma = train_config.heatmap_sigma_factor * (h + w) / 2
+            sigma = train_config.keypoint_heatmap_sigma
 
             if sigma < 0.1:
                 print("tiny sigma!")

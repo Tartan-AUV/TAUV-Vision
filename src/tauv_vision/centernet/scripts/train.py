@@ -4,6 +4,8 @@ import pathlib
 from torch.utils.data import DataLoader, ConcatDataset
 import wandb
 import albumentations as A
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
 
 from tauv_vision.centernet.model.centernet import Centernet, initialize_weights
 from tauv_vision.centernet.model.backbones.dla import DLABackbone
@@ -78,19 +80,19 @@ object_config = ObjectConfigSet(
             train_depth=False,
             train_keypoints=True,
             keypoints=[
-                (0.0, 0.1, 0.1),
-                (0.0, 0.1, -0.1),
-                (0.0, -0.1, -0.08),
-                (0.0, -0.1, 0.08),
+                (0.0, 0.095, 0.105),
+                (0.0, 0.095, -0.105),
+                (0.0, -0.12, -0.06),
+                (0.0, -0.12, 0.06),
             ],
         ),
     ]
 )
 
 train_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets/pay-large-president").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets/talk-traditional-party").expanduser(),
 ]
-val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/pay-large-president").expanduser()
+val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/talk-traditional-party").expanduser()
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
 
@@ -126,6 +128,9 @@ def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, 
 
         total_loss.backward()
 
+        torch.nn.utils.clip_grad_norm_(centernet.parameters(), 1.0, norm_type=2.0, error_if_nonfinite=False,
+                                       foreach=None)
+
         optimizer.step()
 
         wandb.log({"train_total_loss": losses.total})
@@ -158,6 +163,16 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
             img = batch.img
 
             prediction = centernet(img)
+
+            if batch_i == 0:
+                sample_i = 0
+
+                heatmap = F.sigmoid(prediction.heatmap[batch_i, sample_i])
+                fig, axs = plt.subplots()
+                im = axs.imshow(heatmap.detach().cpu())
+                fig.colorbar(im)
+                wandb.log({f"val_heatmap_{batch_i}_{sample_i}": fig})
+                plt.close(fig)
 
             losses = loss(prediction, batch, model_config, train_config, object_config)
 
@@ -214,13 +229,15 @@ def main():
 
     train_transform = A.Compose(
         [
-            A.ColorJitter(
-                brightness=0.3,
-                contrast=0.3,
-                saturation=0.3,
-                hue=1.0,
+            A.HueSaturationValue(
+                hue_shift_limit=(-50, 50),
+                sat_shift_limit=(-30, 0),
+                val_shift_limit=(-20, 20),
                 always_apply=True,
             ),
+            # A.Blur(
+            #     p=0.5,
+            # ),
             A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.3, 0.3, 0.3), always_apply=True)
         ]
     )

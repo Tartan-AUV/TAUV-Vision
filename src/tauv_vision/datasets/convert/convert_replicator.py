@@ -114,6 +114,8 @@ def convert_sample(replicator_out_dir: Path, dataset_dir: Path, sample_id: str) 
     seg_instance_path = replicator_out_dir / f"instance_segmentation_mapping_{sample_id}.json"
 
     camera_path = replicator_out_dir / f"camera_params_{sample_id}.json"
+    if not camera_path.exists():
+        camera_path = replicator_out_dir / f"camera_params_0_0000.json"
 
     rgb_out_path = dataset_dir / "data" / f"{sample_id}.png"
     seg_out_path = dataset_dir / "data" / f"{sample_id}_seg.png"

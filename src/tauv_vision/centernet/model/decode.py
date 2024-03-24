@@ -2,6 +2,7 @@ from typing import Tuple, Optional, List
 from dataclasses import dataclass
 import numpy as np
 import cv2
+import matplotlib.pyplot as plt
 
 import torch
 from math import pi, atan2
