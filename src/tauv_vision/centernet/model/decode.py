@@ -125,16 +125,36 @@ def decode_keypoints(prediction: Prediction,
             match_detection.keypoint_scores[object_keypoint_index] = keypoint_score
 
         for detection in sample_detections:
-            if any([keypoint is None for keypoint in detection.keypoints]):
+            # TODO: Implement partial keypoints
+            n_keypoints = sum([1 if keypoint is not None else 0 for keypoint in detection.keypoints])
+
+            if n_keypoints < 6:
                 continue
 
             object_label = detection.label
 
-            keypoints_img = np.flip(np.array(detection.keypoints), axis=1)
-            keypoints_img_px = keypoints_img * np.array([model_config.in_w, model_config.in_h])
-            keypoints_cam = np.array(object_config.configs[object_label].keypoints)
+            # keypoints_img = np.flip(np.concatenate((np.array([[detection.y, detection.x]]), np.array(detection.keypoints)), axis=0), axis=1)
+            # keypoints_img_px = keypoints_img * np.array([model_config.in_w, model_config.in_h])
+            # keypoints_cam = np.concatenate((np.array([[0, 0, 0]]), np.array(object_config.configs[object_label].keypoints)), axis=0)
 
-            success, rvec, tvec = cv2.solvePnP(keypoints_cam, keypoints_img_px, M_projection, None)
+            keypoints_img = []
+            keypoints_cam = []
+
+            for keypoint_i, keypoint in enumerate(detection.keypoints):
+                if keypoint is not None:
+                    keypoints_img.append([keypoint[1] * model_config.in_w, keypoint[0] * model_config.in_h])
+                    keypoints_cam.append(object_config.configs[object_label].keypoints[keypoint_i])
+
+            # keypoints_img = np.flip(np.array(detection.keypoints), axis=1)
+            # keypoints_img_px = keypoints_img * np.array([model_config.in_w, model_config.in_h])
+            # keypoints_cam = np.array(object_config.configs[object_label].keypoints)
+            keypoints_img = np.array(keypoints_img)
+            keypoints_cam = np.array(keypoints_cam)
+
+            # print(keypoints_img_px)
+
+            # success, rvec, tvec = cv2.solvePnP(keypoints_cam, keypoints_img, M_projection, None, cv2.SOLVEPNP_IPPE)
+            success, rvec, tvec = cv2.solvePnP(keypoints_cam, keypoints_img, M_projection, None, cv2.SOLVEPNP_ITERATIVE)
 
             if success:
                 rotm, _ = cv2.Rodrigues(rvec)
@@ -187,8 +207,8 @@ def decode(prediction: Prediction, model_config: ModelConfig,
                 w=float(prediction.size[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 1]),
             )
 
-            # if prediction.depth is not None:
-            #     detection.depth = float(depth[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 0])
+            if prediction.depth is not None:
+                detection.depth = float(depth[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 0])
             #
             # if prediction.roll_bin is not None:
             #     prediction.roll = float(roll[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1]])

@@ -3,6 +3,7 @@ from math import pi, floor
 import torch.nn.functional as F
 from enum import Enum
 from dataclasses import dataclass
+import matplotlib.pyplot as plt
 
 from tauv_vision.centernet.model.centernet import Prediction
 from tauv_vision.centernet.model.decode import angle_get_bins
@@ -171,7 +172,7 @@ def angle_range(truth_label: torch.Tensor, object_config: ObjectConfigSet, angle
     return result.to(device)
 
 
-def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> Losses:
+def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet, img) -> Losses:
 
     losses = Losses()
 

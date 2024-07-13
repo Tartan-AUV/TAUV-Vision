@@ -18,9 +18,9 @@ torch.autograd.set_detect_anomaly(True)
 model_config = ModelConfig(
     in_h=360,
     in_w=640,
-    backbone_heights=[2, 2, 2, 2, 2, 2],
-    backbone_channels=[128, 128, 128, 128, 128, 128, 128],
-    downsamples=2,
+    backbone_heights=[2, 2, 2, 2, 2],
+    backbone_channels=[128, 128, 128, 128, 128, 128],
+    downsamples=1,
     angle_bin_overlap=pi / 3,
 )
 
@@ -29,89 +29,202 @@ train_config = TrainConfig(
     heatmap_focal_loss_a=2,
     heatmap_focal_loss_b=4,
     heatmap_sigma_factor=0.1,
-    batch_size=16,
-    n_batches=1000,
-    n_epochs=10000,
+    batch_size=8,
+    n_batches=0,
+    n_epochs=100,
     loss_lambda_keypoint_heatmap=1.0,
     loss_lambda_keypoint_affinity=0.01,
     keypoint_heatmap_sigma=2,
     keypoint_affinity_sigma=2,
-    loss_lambda_size=0.0,
+    loss_lambda_size=0.1,
     loss_lambda_offset=0.0,
     loss_lambda_angle=1.0,
-    loss_lambda_depth=1.0,
+    loss_lambda_depth=0.1,
     n_workers=4,
-    weight_save_interval=1,
+    weight_save_interval=10,
 )
-
 
 object_config = ObjectConfigSet(
     configs=[
-        # ObjectConfig(
-        #     id="torpedo_22_circle",
-        #     yaw=AngleConfig(
-        #         train=True,
-        #         modulo=2 * pi,
-        #     ),
-        #     pitch=AngleConfig(
-        #         train=True,
-        #         modulo=2 * pi,
-        #     ),
-        #     roll=AngleConfig(
-        #         train=True,
-        #         modulo=2 * pi,
-        #     ),
-        #     train_depth=True,
-        # ),
         ObjectConfig(
-            id="torpedo_22_trapezoid",
-            yaw=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            train_depth=False,
+            id="sample_24_worm",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
             train_keypoints=True,
             keypoints=[
-                (0.0, 0.095, 0.105),
-                (0.0, 0.095, -0.105),
-                (0.0, -0.12, -0.06),
-                (0.0, -0.12, 0.06),
+                (0, 0, 0.08659),
+            ]
+        ),
+        ObjectConfig(
+            id="sample_24_coral",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0.15364, 0),
+                (0, 0.01447, 0.06353),
+                (0.04461, 0.01447, -0.07617),
+                (-0.04461, 0.01447, -0.07617),
+                (0.11042, 0.04946, -0.09637),
+                (-0.11011, 0.04946, -0.05596),
+                (0.07636, 0.04576, 0.04493),
+                (0.07636, 0.13557, -0.04487),
+            ]
+        ),
+        ObjectConfig(
+            id="sample_24_nautilus",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0.04828, 0.09168, -0.08136),
+                (0.09411, 0.01364, 0.14643),
+                (-0.04681, 0.01364, 0.08806),
+                (0.10495, 0.01364, -0.06372),
+                (0.14247, 0.03766, 0.04158),
+                (0.04005, 0.07867, 0.07143),
+                (0.00363, 0.08621, -0.03654)
+            ]
+        ),
+        ObjectConfig(
+            id="bin_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+                (0.30480, 0.15875, 0.15240),
+                (0.30480, 0.15875, -0.15240),
+                (-0.30480, 0.15875, -0.15240),
+                (-0.30480, 0.15875, 0.15240),
+                (0, 0.15875, 0.15240),
+                (0, 0.15875, -0.15240),
             ],
         ),
+        ObjectConfig(
+            id="bin_24_red",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+
+        ObjectConfig(
+            id="bin_24_blue",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="buoy_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="gate_24_ccw",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="gate_24_cw",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="path_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+                (0.53340, 0, 0),
+                (-0.53340, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="torpedo_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+                (0.6096, 0, 0.6096),
+                (0.6096, 0, -0.6096),
+                (-0.6096, 0, -0.6096),
+                (-0.6096, 0, 0.6096),
+                (-0.3, 0, 0),
+                (0.3, 0, 0),
+                (0, 0, -0.3),
+                (0, 0, 0.3),
+            ],
+        ),
+        ObjectConfig(
+            id="torpedo_24_octagon",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        )
     ]
 )
 
 train_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets/talk-traditional-party").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/happen-right-city").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/mean-red-business").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/meet-special-water").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/need-general-service").expanduser(),
 ]
-val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/talk-traditional-party").expanduser()
+val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets-New/happen-right-city").expanduser()
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
-
-
-# From https://stackoverflow.com/questions/47714643/pytorch-data-loader-multiple-iterations
-
-def cycle(iterable):
-    while True:
-        for x in iterable:
-            yield x
 
 
 def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, train_config, device):
     centernet.train()
 
-
     for batch_i, batch in enumerate(data_loader):
-        if batch_i >= train_config.n_batches:
-            break
-
         print(f"train epoch {epoch_i}, batch {batch_i}")
 
         optimizer.zero_grad()
@@ -122,14 +235,14 @@ def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, 
 
         prediction = centernet(img)
 
-        losses = loss(prediction, batch, model_config, train_config, object_config)
+        losses = loss(prediction, batch, model_config, train_config, object_config, img)
 
         total_loss = losses.total
 
         total_loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(centernet.parameters(), 1.0, norm_type=2.0, error_if_nonfinite=False,
-                                       foreach=None)
+        # torch.nn.utils.clip_grad_norm_(centernet.parameters(), 1.0, norm_type=2.0, error_if_nonfinite=False,
+        #                                foreach=None)
 
         optimizer.step()
 
@@ -174,7 +287,7 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
                 wandb.log({f"val_heatmap_{batch_i}_{sample_i}": fig})
                 plt.close(fig)
 
-            losses = loss(prediction, batch, model_config, train_config, object_config)
+            losses = loss(prediction, batch, model_config, train_config, object_config, img)
 
             wandb.log({"val_total_loss": losses.total})
             wandb.log({"val_heatmap_loss": losses.heatmap})
@@ -230,21 +343,21 @@ def main():
     train_transform = A.Compose(
         [
             A.HueSaturationValue(
-                hue_shift_limit=(-50, 50),
+                hue_shift_limit=(-20, 20),
                 sat_shift_limit=(-30, 0),
                 val_shift_limit=(-20, 20),
                 always_apply=True,
             ),
-            # A.Blur(
-            #     p=0.5,
-            # ),
-            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.3, 0.3, 0.3), always_apply=True)
+            A.Blur(
+                p=0.5,
+            ),
+            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True)
         ]
     )
 
     val_transform = A.Compose(
         [
-            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.3, 0.3, 0.3), always_apply=True)
+            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True)
         ]
     )
 
@@ -279,9 +392,10 @@ def main():
         num_workers=train_config.n_workers,
     )
 
-    train_dataloader_cycle = iter(cycle(train_dataloader))
-
     for epoch_i in range(train_config.n_epochs):
+        save_path = results_root / f"latest.pt"
+        torch.save(centernet.state_dict(), save_path)
+
         if epoch_i % train_config.weight_save_interval == 0:
             save_path = results_root / f"{epoch_i}.pt"
             torch.save(centernet.state_dict(), save_path)
@@ -289,7 +403,7 @@ def main():
             artifact.add_dir(results_root)
             wandb.log_artifact(artifact)
 
-        run_train_epoch(epoch_i, centernet, optimizer, train_dataloader_cycle, train_config, device)
+        run_train_epoch(epoch_i, centernet, optimizer, train_dataloader, train_config, device)
 
         run_validation_epoch(epoch_i, centernet, val_dataloader, device)
 

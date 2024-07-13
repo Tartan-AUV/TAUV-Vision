@@ -160,6 +160,19 @@ def convert_sample(replicator_out_dir: Path, dataset_dir: Path, sample_id: str) 
     world_t_camera_base_np[0:3, 0:3] = orthonormalize(world_t_camera_base_np[0:3, 0:3])
     world_t_camera_base_np[0:3, 3] *= world_units_to_m
     world_t_cam_base = SE3(world_t_camera_base_np)
+    # world_t_cam_base = SE3(SO3.TwoVectors(x="y", y="z")) * SE3(world_t_camera_base_np)
+
+    # TODO: THIS MUST BE FIXed
+
+    # world_t_weird_world = SE3(SO3.TwoVectors(x="-z", y="x"))
+    # world_t_cam_base = world_t_weird_world * SE3(world_t_camera_base_np)
+
+    # world_t_cam_base = SE3.Rt(
+    #     SO3.TwoVectors(y="-z", x="x"),
+    #     np.array([0, 8, 0]),
+    # )
+
+    # TODO: world_t_cam_base is not what i expect
 
     objects = []
 
@@ -205,8 +218,8 @@ def convert_sample(replicator_out_dir: Path, dataset_dir: Path, sample_id: str) 
 
         cam_t_object = cam_base_t_cam.inv() * world_t_cam_base.inv() * world_t_object
 
-        p0_3d_object = np.array([x0_3d, y0_3d, z0_3d])
-        p1_3d_object = np.array([x1_3d, y1_3d, z1_3d])
+        p0_3d_object = world_units_to_m * np.array([x0_3d, y0_3d, z0_3d])
+        p1_3d_object = world_units_to_m * np.array([x1_3d, y1_3d, z1_3d])
 
         p0_3d_cam = (cam_t_object * p0_3d_object).flatten()
         p1_3d_cam = (cam_t_object * p1_3d_object).flatten()
