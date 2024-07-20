@@ -32,7 +32,7 @@ train_config = TrainConfig(
     heatmap_focal_loss_a=2,
     heatmap_focal_loss_b=4,
     heatmap_sigma_factor=0.1,
-    batch_size=64,
+    batch_size=32,
     n_batches=0,
     n_epochs=100,
     loss_lambda_keypoint_heatmap=1.0,
@@ -195,7 +195,7 @@ train_dataset_roots = [
     pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
 ]
 val_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-Ne/nuw/stand-traditional-issue").expanduser(),
     pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
 ]
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
