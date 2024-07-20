@@ -15,8 +15,7 @@ from transform_client import TransformClient
 from tauv_util.cameras import CameraIntrinsics
 from tauv_util.spatialmath import ros_transform_to_se3, r3_to_ros_vector3, r3_to_ros_point
 from tauv_msgs.msg import FeatureDetection, FeatureDetections
-from tauv_vision.centernet.model.centernet import Centernet
-from tauv_vision.centernet.model.backbones.dla import DLABackbone
+from tauv_vision.centernet.model.backbones.centerpoint_dla import CenterpointDLA34
 from tauv_vision.centernet.model.config import ObjectConfig, ObjectConfigSet, AngleConfig, ModelConfig, TrainConfig
 from tauv_vision.centernet.model.decode import decode_keypoints
 
@@ -24,51 +23,53 @@ from tauv_vision.centernet.model.decode import decode_keypoints
 model_config = ModelConfig(
     in_h=360,
     in_w=640,
-    backbone_heights=[2, 2, 2, 2, 2, 2],
-    backbone_channels=[128, 128, 128, 128, 128, 128, 128],
-    downsamples=1,
+    backbone_heights=[2, 2, 2, 2, 2],
+    backbone_channels=[128, 128, 128, 128, 128, 128],
+    downsamples=2,
     angle_bin_overlap=pi / 3,
 )
 
 object_config = ObjectConfigSet(
     configs=[
         ObjectConfig(
-            id="torpedo_22_trapezoid",
-            yaw=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            train_depth=False,
+            id="torpedo_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
             train_keypoints=True,
             keypoints=[
-                (0.0, 0.095, 0.105),
-                (0.0, 0.095, -0.105),
-                (0.0, -0.12, -0.06),
-                (0.0, -0.12, 0.06),
-                (0.0, 0.509, 0.432),
-                (0.0, 0.223, 0.337),
-                (0.0, 0.398, 0.207),
-                (0.0, 0.334, 0.063),
-                (0.0, -0.112, 0.278),
-                (0.0, 0.269, -0.062),
+                (0, 0, 0),
+                (0.6096, 0.6096, 0),
+                (0.6096, -0.6096, 0),
+                (-0.6096, -0.6096, 0),
+                (-0.6096, 0.6096, 0),
+                (-0.3, 0, 0),
+                (0.3, 0, 0),
+                (0, -0.3, 0),
+                (0, 0.3, 0),
             ],
         ),
+        ObjectConfig(
+            id="torpedo_24_octagon",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=True,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        )
     ]
 )
 
 object_t_detections: Dict[str, SE3] = {
-    "torpedo_22_trapezoid": SE3(SO3.TwoVectors(x="-x", z="-y")),
+    "torpedo_24": SE3(SO3.TwoVectors(x="-z", y="x")),
+    "torpedo_24_octagon": SE3(SO3.TwoVectors(x="-z", y="x")),
 }
 
-weights_path = pathlib.Path("/shared/weights/ancient-frost-119_10.pt").expanduser()
+weights_path = pathlib.Path("/shared/weights/dauntless-disco-272-latest.pt").expanduser()
 
 
 class CenternetNode:
@@ -82,9 +83,7 @@ class CenternetNode:
 
         self._device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels,
-                                   model_config.downsamples)
-        self._centernet = Centernet(dla_backbone, object_config).to(self._device)
+        self._centernet = CenterpointDLA34(object_config).to(self._device)
         self._centernet.load_state_dict(torch.load(weights_path, map_location=self._device))
         self._centernet.eval()
 
@@ -93,6 +92,7 @@ class CenternetNode:
         self._camera_infos: Dict[str, CameraInfo] = {}
         self._intrinsics: Dict[str, CameraIntrinsics] = {}
         self._color_subs: Dict[str, rospy.Subscriber] = {}
+        self._depth_subs: Dict[str, rospy.Subscriber] = {}
         self._debug_pubs: Dict[str, rospy.Publisher] = {}
 
         for frame_id in self._frame_ids:
@@ -100,26 +100,36 @@ class CenternetNode:
             self._intrinsics[frame_id] = CameraIntrinsics.from_matrix(np.array(self._camera_infos[frame_id].K))
 
             self._color_subs[frame_id] = rospy.Subscriber(f"vehicle/{frame_id}/color/image_raw", Image, partial(self._handle_img, frame_id=frame_id))
+            self._depth_subs[frame_id] = rospy.Subscriber(f'vehicle/{frame_id}/depth/image_raw', Image, self._handle_depth, callback_args=frame_id)
 
             self._debug_pubs[frame_id] = rospy.Publisher(f"centernet/{frame_id}/debug", Image, queue_size=10)
 
         self._detections_pub: rospy.Publisher = rospy.Publisher("global_map/feature_detections", FeatureDetections, queue_size=10)
 
+        self._depth = {}
+
     def start(self):
         rospy.spin()
 
+    def _handle_depth(self, msg, frame_id):
+        self._depth[frame_id] = msg
+
     def _handle_img(self, color_msg: Image, frame_id: str):
+        depth_msg = self._depth.get(frame_id)
+        if depth_msg is None:
+            return
+
         color_np = self._cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
+        depth = self._cv_bridge.imgmsg_to_cv2(depth_msg, desired_encoding='mono16')
+        depth = depth.astype(float) / 1000
 
         img_raw = T.ToTensor()(color_np)
         img = T.Resize((model_config.in_h, model_config.in_w))(img_raw.unsqueeze(0))
-        img = T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.3, 0.3, 0.3))(img).to(self._device)
+        img = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))(img).to(self._device)
 
         prediction = self._centernet.forward(img)
 
         intrinsics = self._intrinsics[frame_id]
-
-        # print(intrinsics)
 
         M_projection = np.array([
             [intrinsics.f_x / 2, 0, intrinsics.c_x / 2],
@@ -133,10 +143,10 @@ class CenternetNode:
             object_config,
             M_projection,
             n_detections=10,
-            keypoint_n_detections=10,
-            score_threshold=0.3,
+            keypoint_n_detections=50,
+            score_threshold=0.5,
             keypoint_score_threshold=0.3,
-            keypoint_angle_threshold=0.5,
+            keypoint_angle_threshold=0.3,
         )[0]
 
         world_frame = f"{self._tf_namespace}/odom"
@@ -160,11 +170,48 @@ class CenternetNode:
         detection_array_msg.detector_tag = "centernet"
 
         for detection_i, detection in enumerate(detections):
-            if detection.cam_t_object is None:
+            print(detection)
+
+            cv2.circle(detection_debug_np, (int(detection.x * 640), int(detection.y * 360)), 3, (255, 0, 0), -1)
+
+            e_x = detection.x * 640
+            e_y = detection.y * 360
+            w = detection.w * 640
+            h = detection.h * 360
+
+            depth_mask = np.zeros(depth.shape, dtype=np.uint8)
+
+            cv2.rectangle(
+                depth_mask,
+                (int(e_x - 0.4 * w), int(e_y - 0.4 * h)),
+                (int(e_x + 0.4 * w), int(e_y + 0.4 * h)),
+                255,
+                -1
+            )
+
+            cv2.rectangle(
+                detection_debug_np,
+                (int(e_x - 0.4 * w), int(e_y - 0.4 * h)),
+                (int(e_x + 0.4 * w), int(e_y + 0.4 * h)),
+                (0, 0, 255),
+                1
+            )
+
+            if np.sum(depth[(depth_mask > 0) & (depth > 0)]) < 10:
                 continue
 
+            z = np.mean(depth[(depth_mask > 0) & (depth > 0)])
+
+            if z < 1:
+                continue
+
+            x = (e_x - M_projection[0, 2]) * (z / M_projection[0, 0])
+            y = (e_y - M_projection[1, 2]) * (z / M_projection[1, 1])
+
+            cam_t_detection = SE3.Rt(SO3.TwoVectors(x="z", y="x"), np.array([x, y, z]))
+
             detection_id = object_config.configs[detection.label].id
-            cam_t_detection = detection.cam_t_object * object_t_detections[detection_id]
+            # cam_t_detection = cam_t_object * object_t_detections[detection_id]
 
             world_t_detection = world_t_cam * cam_t_detection
             # cam_t_object = detection.cam_t_object
@@ -175,7 +222,7 @@ class CenternetNode:
             # world_t_detection = world_t_object
 
             # self._tf_client.set_a_to_b('kf/odom', 'raw_buoy', world_t_object)
-            self._tf_client.set_a_to_b('kf/odom', 'adjusted_buoy', world_t_detection)
+            # self._tf_client.set_a_to_b('kf/odom', 'adjusted_buoy', world_t_detection)
 
             detection_msg = FeatureDetection()
             detection_msg.confidence = 1
@@ -186,11 +233,6 @@ class CenternetNode:
             detection_msg.orientation = r3_to_ros_point(rpy)
 
             detection_array_msg.detections.append(detection_msg)
-
-            rvec, _ = cv2.Rodrigues(detection.cam_t_object.R)
-            tvec = detection.cam_t_object.t
-
-            cv2.drawFrameAxes(detection_debug_np, M_projection, None, rvec, tvec, 0.1, 3)
 
         self._detections_pub.publish(detection_array_msg)
 

@@ -6,12 +6,15 @@ import wandb
 import albumentations as A
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import numpy as np
 
-from tauv_vision.centernet.model.centernet import Centernet, initialize_weights
+from tauv_vision.centernet.model.centernet import Centernet, initialize_weights, get_head_channels
 from tauv_vision.centernet.model.backbones.dla import DLABackbone
 from tauv_vision.centernet.model.loss import loss
 from tauv_vision.centernet.model.config import ObjectConfig, ObjectConfigSet, AngleConfig, ModelConfig, TrainConfig
 from tauv_vision.datasets.load.pose_dataset import PoseDataset, PoseSample, Split
+
+from tauv_vision.centernet.model.backbones.centerpoint_dla import CenterpointDLA34
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -20,16 +23,16 @@ model_config = ModelConfig(
     in_w=640,
     backbone_heights=[2, 2, 2, 2, 2],
     backbone_channels=[128, 128, 128, 128, 128, 128],
-    downsamples=1,
+    downsamples=2,
     angle_bin_overlap=pi / 3,
 )
 
 train_config = TrainConfig(
-    lr=1e-3,
+    lr=5e-4,
     heatmap_focal_loss_a=2,
     heatmap_focal_loss_b=4,
     heatmap_sigma_factor=0.1,
-    batch_size=8,
+    batch_size=32,
     n_batches=0,
     n_epochs=100,
     loss_lambda_keypoint_heatmap=1.0,
@@ -38,7 +41,7 @@ train_config = TrainConfig(
     keypoint_affinity_sigma=2,
     loss_lambda_size=0.1,
     loss_lambda_offset=0.0,
-    loss_lambda_angle=1.0,
+    loss_lambda_angle=0.1,
     loss_lambda_depth=0.1,
     n_workers=4,
     weight_save_interval=10,
@@ -47,32 +50,14 @@ train_config = TrainConfig(
 object_config = ObjectConfigSet(
     configs=[
         ObjectConfig(
-            id="sample_24_worm",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0.08659),
-            ]
-        ),
-        ObjectConfig(
             id="sample_24_coral",
             yaw=AngleConfig(train=False, modulo=2 * pi),
             pitch=AngleConfig(train=False, modulo=2 * pi),
             roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
+            train_depth=False,
             train_keypoints=True,
             keypoints=[
-                (0, 0.15364, 0),
-                (0, 0.01447, 0.06353),
-                (0.04461, 0.01447, -0.07617),
-                (-0.04461, 0.01447, -0.07617),
-                (0.11042, 0.04946, -0.09637),
-                (-0.11011, 0.04946, -0.05596),
-                (0.07636, 0.04576, 0.04493),
-                (0.07636, 0.13557, -0.04487),
+                (0, 0, 0)
             ]
         ),
         ObjectConfig(
@@ -80,121 +65,115 @@ object_config = ObjectConfigSet(
             yaw=AngleConfig(train=False, modulo=2 * pi),
             pitch=AngleConfig(train=False, modulo=2 * pi),
             roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
+            train_depth=False,
             train_keypoints=True,
             keypoints=[
-                (0.04828, 0.09168, -0.08136),
-                (0.09411, 0.01364, 0.14643),
-                (-0.04681, 0.01364, 0.08806),
-                (0.10495, 0.01364, -0.06372),
-                (0.14247, 0.03766, 0.04158),
-                (0.04005, 0.07867, 0.07143),
-                (0.00363, 0.08621, -0.03654)
+                (0, 0, 0)
             ]
         ),
-        ObjectConfig(
-            id="bin_24",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0),
-                (0.30480, 0.15875, 0.15240),
-                (0.30480, 0.15875, -0.15240),
-                (-0.30480, 0.15875, -0.15240),
-                (-0.30480, 0.15875, 0.15240),
-                (0, 0.15875, 0.15240),
-                (0, 0.15875, -0.15240),
-            ],
-        ),
-        ObjectConfig(
-            id="bin_24_red",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0),
-            ],
-        ),
-
-        ObjectConfig(
-            id="bin_24_blue",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0),
-            ],
-        ),
-        ObjectConfig(
-            id="buoy_24",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0),
-            ],
-        ),
-        ObjectConfig(
-            id="gate_24_ccw",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0),
-            ],
-        ),
-        ObjectConfig(
-            id="gate_24_cw",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0),
-            ],
-        ),
-        ObjectConfig(
-            id="path_24",
-            yaw=AngleConfig(train=False, modulo=2 * pi),
-            pitch=AngleConfig(train=False, modulo=2 * pi),
-            roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
-            train_keypoints=True,
-            keypoints=[
-                (0, 0, 0),
-                (0.53340, 0, 0),
-                (-0.53340, 0, 0),
-            ],
-        ),
+        # ObjectConfig(
+        #     id="bin_24",
+        #     yaw=AngleConfig(train=False, modulo=2 * pi),
+        #     pitch=AngleConfig(train=False, modulo=2 * pi),
+        #     roll=AngleConfig(train=False, modulo=2 * pi),
+        #     train_depth=True,
+        #     train_keypoints=True,
+        #     keypoints=[
+        #         (0, 0, 0),
+        #         (0.30480, 0.15875, 0.15240),
+        #         (0.30480, 0.15875, -0.15240),
+        #         (-0.30480, 0.15875, -0.15240),
+        #         (-0.30480, 0.15875, 0.15240),
+        #         (0, 0.15875, 0.15240),
+        #         (0, 0.15875, -0.15240),
+        #     ],
+        # ),
+        # ObjectConfig(
+        #     id="bin_24_red",
+        #     yaw=AngleConfig(train=False, modulo=2 * pi),
+        #     pitch=AngleConfig(train=False, modulo=2 * pi),
+        #     roll=AngleConfig(train=False, modulo=2 * pi),
+        #     train_depth=True,
+        #     train_keypoints=True,
+        #     keypoints=[
+        #         (0, 0, 0),
+        #     ],
+        # ),
+        #
+        # ObjectConfig(
+        #     id="bin_24_blue",
+        #     yaw=AngleConfig(train=False, modulo=2 * pi),
+        #     pitch=AngleConfig(train=False, modulo=2 * pi),
+        #     roll=AngleConfig(train=False, modulo=2 * pi),
+        #     train_depth=True,
+        #     train_keypoints=True,
+        #     keypoints=[
+        #         (0, 0, 0),
+        #     ],
+        # ),
+        # ObjectConfig(
+        #     id="buoy_24",
+        #     yaw=AngleConfig(train=False, modulo=2 * pi),
+        #     pitch=AngleConfig(train=False, modulo=2 * pi),
+        #     roll=AngleConfig(train=False, modulo=2 * pi),
+        #     train_depth=True,
+        #     train_keypoints=True,
+        #     keypoints=[
+        #         (0, 0, 0),
+        #     ],
+        # ),
+        # ObjectConfig(
+        #     id="gate_24_ccw",
+        #     yaw=AngleConfig(train=False, modulo=2 * pi),
+        #     pitch=AngleConfig(train=False, modulo=2 * pi),
+        #     roll=AngleConfig(train=False, modulo=2 * pi),
+        #     train_depth=True,
+        #     train_keypoints=True,
+        #     keypoints=[
+        #         (0, 0, 0),
+        #     ],
+        # ),
+        # ObjectConfig(
+        #     id="gate_24_cw",
+        #     yaw=AngleConfig(train=False, modulo=2 * pi),
+        #     pitch=AngleConfig(train=False, modulo=2 * pi),
+        #     roll=AngleConfig(train=False, modulo=2 * pi),
+        #     train_depth=True,
+        #     train_keypoints=True,
+        #     keypoints=[
+        #         (0, 0, 0),
+        #     ],
+        # ),
+        # ObjectConfig(
+        #     id="path_24",
+        #     yaw=AngleConfig(train=False, modulo=2 * pi),
+        #     pitch=AngleConfig(train=False, modulo=2 * pi),
+        #     roll=AngleConfig(train=False, modulo=2 * pi),
+        #     train_depth=True,
+        #     train_keypoints=True,
+        #     keypoints=[
+        #         (0, 0, 0),
+        #         (0.53340, 0, 0),
+        #         (-0.53340, 0, 0),
+        #     ],
+        # ),
         ObjectConfig(
             id="torpedo_24",
             yaw=AngleConfig(train=False, modulo=2 * pi),
             pitch=AngleConfig(train=False, modulo=2 * pi),
             roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
+            train_depth=False,
             train_keypoints=True,
             keypoints=[
                 (0, 0, 0),
-                (0.6096, 0, 0.6096),
-                (0.6096, 0, -0.6096),
-                (-0.6096, 0, -0.6096),
-                (-0.6096, 0, 0.6096),
-                (-0.3, 0, 0),
-                (0.3, 0, 0),
-                (0, 0, -0.3),
-                (0, 0, 0.3),
+                # (0.6096, 0.6096, 0),
+                # (0.6096, -0.6096, 0),
+                # (-0.6096, -0.6096, 0),
+                # (-0.6096, 0.6096, 0),
+                # (-0.3, 0, 0),
+                # (0.3, 0, 0),
+                # (0, -0.3, 0),
+                # (0, 0.3, 0),
             ],
         ),
         ObjectConfig(
@@ -202,7 +181,7 @@ object_config = ObjectConfigSet(
             yaw=AngleConfig(train=False, modulo=2 * pi),
             pitch=AngleConfig(train=False, modulo=2 * pi),
             roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
+            train_depth=False,
             train_keypoints=True,
             keypoints=[
                 (0, 0, 0),
@@ -212,12 +191,13 @@ object_config = ObjectConfigSet(
 )
 
 train_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets-New/happen-right-city").expanduser(),
-    pathlib.Path("~/Documents/TAUV-Datasets-New/mean-red-business").expanduser(),
-    pathlib.Path("~/Documents/TAUV-Datasets-New/meet-special-water").expanduser(),
-    pathlib.Path("~/Documents/TAUV-Datasets-New/need-general-service").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
 ]
-val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets-New/happen-right-city").expanduser()
+val_dataset_roots = [
+    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
+]
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
 
@@ -241,8 +221,8 @@ def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, 
 
         total_loss.backward()
 
-        # torch.nn.utils.clip_grad_norm_(centernet.parameters(), 1.0, norm_type=2.0, error_if_nonfinite=False,
-        #                                foreach=None)
+        torch.nn.utils.clip_grad_norm_(centernet.parameters(), 1.0, norm_type=2.0, error_if_nonfinite=False,
+                                       foreach=None)
 
         optimizer.step()
 
@@ -328,6 +308,42 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
     wandb.log({"val_avg_depth_loss": avg_losses[9]})
 
 
+train_transform = A.Compose(
+    [
+        A.RandomSizedCrop(
+            min_max_height=(260, 360),
+            w2h_ratio=640 / 360,
+            width=640,
+            height=360,
+            p=0.25,
+        ),
+        A.HueSaturationValue(
+            hue_shift_limit=(-20, 20),
+            sat_shift_limit=(-30, 30),
+            val_shift_limit=(-20, 20),
+            p=0.5,
+        ),
+        A.Flip(),
+        A.Blur(),
+        A.GaussNoise(),
+        A.PiecewiseAffine(scale=[0.01, 0.02], nb_rows=4, nb_cols=4, p=0.1),
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True),
+    ],
+    bbox_params=A.BboxParams(format="albumentations", label_fields=["bbox_labels", "bbox_indices", "roll", "pitch", "yaw", "depth"]),
+    keypoint_params=A.KeypointParams(format="xy", label_fields=["keypoint_labels", "keypoint_object_indices"]),
+)
+
+
+val_transform = A.Compose(
+    [
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True)
+    ],
+    bbox_params=A.BboxParams(format="albumentations",
+                             label_fields=["bbox_labels", "bbox_indices", "roll", "pitch", "yaw", "depth"]),
+    keypoint_params=A.KeypointParams(format="xy", label_fields=["keypoint_labels", "keypoint_object_indices"]),
+)
+
+
 def main():
     for checkpoint in results_root.iterdir():
         checkpoint.unlink()
@@ -337,35 +353,11 @@ def main():
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
     print(f"running on {device}")
 
-    train_transform = A.Compose(
-        [
-            A.HueSaturationValue(
-                hue_shift_limit=(-20, 20),
-                sat_shift_limit=(-30, 0),
-                val_shift_limit=(-20, 20),
-                always_apply=True,
-            ),
-            A.Blur(
-                p=0.5,
-            ),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True)
-        ]
-    )
-
-    val_transform = A.Compose(
-        [
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True)
-        ]
-    )
-
-    dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels, model_config.downsamples)
-    centernet = Centernet(dla_backbone, object_config).to(device)
+    centernet = CenterpointDLA34(object_config).to(device)
 
     centernet.train()
-    initialize_weights(centernet, [])
 
     optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-3)
 
@@ -374,7 +366,11 @@ def main():
         for dataset_root in train_dataset_roots
     ]
     train_dataset = ConcatDataset(train_datasets)
-    val_dataset = PoseDataset(val_dataset_root, Split.VAL, object_config.label_id_to_index, object_config, val_transform)
+    val_datasets = [
+        PoseDataset(dataset_root, Split.VAL, object_config.label_id_to_index, object_config, val_transform)
+        for dataset_root in val_dataset_roots
+    ]
+    val_dataset = ConcatDataset(train_datasets)
 
     train_dataloader = DataLoader(
         train_dataset,

@@ -18,14 +18,14 @@ misc_hdris = glob.glob(str(HDRI_DIR / "misc/*.exr"))
 
 objs = [
     str(MODELS_DIR / "bin_24/usd/bin_24.usd"),
-    str(MODELS_DIR / "buoy_24/usd/buoy_24.usd"),
-    str(MODELS_DIR / "gate_24/usd/gate_24_ccw.usd"),
-    str(MODELS_DIR / "gate_24/usd/gate_24_cw.usd"),
-    str(MODELS_DIR / "path_24/usd/path_24.usd"),
-    str(MODELS_DIR / "samples_24/usd/sample_24_coral.usd"),
-    str(MODELS_DIR / "samples_24/usd/sample_24_nautilus.usd"),
-    str(MODELS_DIR / "samples_24/usd/sample_24_worm.usd"),
-    str(MODELS_DIR / "torpedo_24/usd/torpedo_24.usd"),
+    # str(MODELS_DIR / "buoy_24/usd/buoy_24.usd"),
+    # str(MODELS_DIR / "gate_24/usd/gate_24_ccw.usd"),
+    # str(MODELS_DIR / "gate_24/usd/gate_24_cw.usd"),
+    # str(MODELS_DIR / "path_24/usd/path_24.usd"),
+    # str(MODELS_DIR / "samples_24/usd/sample_24_coral.usd"),
+    # str(MODELS_DIR / "samples_24/usd/sample_24_nautilus.usd"),
+    # str(MODELS_DIR / "samples_24/usd/sample_24_worm.usd"),
+    # str(MODELS_DIR / "torpedo_24/usd/torpedo_24.usd"),
 ]
 
 distractors = [
@@ -98,7 +98,7 @@ with rep.new_layer():
         water = rep.get.prim_at_path(f"{SCENE_PRIM_PREFIX}/Looks/Water")
 
         with water:
-            rep.modify.attribute("inputs:volume_scattering", rep.distribution.uniform(0.0, 0.2))
+            rep.modify.attribute("inputs:volume_scattering", rep.distribution.uniform(0.0, 0.05))
             rep.modify.attribute("inputs:base_thickness", rep.distribution.uniform(1, 5))
 
         return water.node
@@ -154,10 +154,10 @@ with rep.new_layer():
 
         obj_prims = rep.get.prims(semantics=[("type", "object")])
 
-        with obj_prims:
-            rep.modify.visibility(
-                rep.distribution.choice([True, False], weights=[0.1, 0.9])
-            )
+        # with obj_prims:
+        #     rep.modify.visibility(
+        #         rep.distribution.choice([True, False], weights=[0.1, 0.9])
+        #     )
 
         samples = rep.get.prims(semantics=[("class", "sample_24_worm"), ("class", "sample_24_coral"), ("class", "sample_24_nautilus")])
 

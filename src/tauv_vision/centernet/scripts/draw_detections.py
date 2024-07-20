@@ -6,6 +6,7 @@ import pathlib
 from math import pi
 import torchvision.transforms.v2 as T
 
+from tauv_vision.centernet.model.backbones.centerpoint_dla import CenterpointDLA34
 from tauv_vision.centernet.model.centernet import Centernet, initialize_weights
 from tauv_vision.centernet.model.backbones.dla import DLABackbone
 from tauv_vision.centernet.model.loss import loss
@@ -14,121 +15,96 @@ from tauv_vision.datasets.load.pose_dataset import PoseDataset, PoseSample, Spli
 from tauv_vision.centernet.model.decode import decode_keypoints, KeypointDetection
 
 
-# model_config = ModelConfig(
-#     in_h=360,
-#     in_w=640,
-#     backbone_heights=[2, 2, 2, 2, 2, 2],
-#     backbone_channels=[128, 128, 128, 128, 128, 128, 128],
-#     downsamples=1,
-#     angle_bin_overlap=pi / 3,
-# )
 model_config = ModelConfig(
     in_h=360,
     in_w=640,
-    backbone_heights=[2, 2, 2, 2, 2, 2],
-    backbone_channels=[128, 128, 128, 128, 128, 128, 128],
-    downsamples=1,
+    backbone_heights=[2, 2, 2, 2, 2],
+    backbone_channels=[128, 128, 128, 128, 128, 128],
+    downsamples=2,
     angle_bin_overlap=pi / 3,
 )
 
+train_config = TrainConfig(
+    lr=5e-4,
+    heatmap_focal_loss_a=2,
+    heatmap_focal_loss_b=4,
+    heatmap_sigma_factor=0.1,
+    batch_size=32,
+    n_batches=0,
+    n_epochs=100,
+    loss_lambda_keypoint_heatmap=1.0,
+    loss_lambda_keypoint_affinity=0.01,
+    keypoint_heatmap_sigma=2,
+    keypoint_affinity_sigma=2,
+    loss_lambda_size=0.1,
+    loss_lambda_offset=0.0,
+    loss_lambda_angle=0.0,
+    loss_lambda_depth=0.1,
+    n_workers=4,
+    weight_save_interval=10,
+)
+
+
 object_config = ObjectConfigSet(
     configs=[
-        # ObjectConfig(
-        #     id="torpedo_22_trapezoid",
-        #     yaw=AngleConfig(
-        #         train=False,
-        #         modulo=2 * pi,
-        #     ),
-        #     pitch=AngleConfig(
-        #         train=False,
-        #         modulo=2 * pi,
-        #     ),
-        #     roll=AngleConfig(
-        #         train=False,
-        #         modulo=2 * pi,
-        #     ),
-        #     train_depth=False,
-        #     train_keypoints=True,
-        #     keypoints=[
-        #         (0.0, 0.1, 0.1),
-        #         (0.0, 0.1, -0.1),
-        #         (0.0, -0.1, -0.08),
-        #         (0.0, -0.1, 0.08),
-        #         (0.0, 0.509, 0.432),
-        #         (0.0, 0.223, 0.337),
-        #         (0.0, 0.398, 0.207),
-        #         (0.0, 0.334, 0.063),
-        #         (0.0, -0.112, 0.278),
-        #         (0.0, 0.269, -0.062),
-        #     ],
-        # ),
-        ObjectConfig(
-            id="sample_24_worm",
-            yaw=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            train_depth=True,
-            train_keypoints=False,
-            keypoints=[]
-        ),
         ObjectConfig(
             id="sample_24_coral",
-            yaw=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            train_depth=True,
-            train_keypoints=False,
-            keypoints=[]
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0)
+            ]
         ),
         ObjectConfig(
             id="sample_24_nautilus",
-            yaw=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            train_depth=True,
-            train_keypoints=False,
-            keypoints=[]
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0)
+            ]
+        ),
+        ObjectConfig(
+            id="torpedo_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="torpedo_24_octagon",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
         ),
     ]
 )
+checkpoint = pathlib.Path("~/Documents/centernet_runs/latest.pt").expanduser()
 
-checkpoint = pathlib.Path("~/Documents/centernet_runs/16.pt").expanduser()
-
-in_video = pathlib.Path("~/Documents/torpedo_22_2.mp4").expanduser()
-out_video = pathlib.Path("~/Documents/torpedo_22_2_out.mp4").expanduser()
+in_video = pathlib.Path("~/Downloads/oakd_bottom-color_2024-07-18-01-21-23_15.mp4").expanduser()
+out_video = pathlib.Path("~/Downloads/oakd_bottom-color_2024-07-18-01-21-23_15.out.mp4").expanduser()
 
 def main():
-    device = torch.device("cpu")
+    device = torch.device("cuda")
 
-    dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels, model_config.downsamples)
-    centernet = Centernet(dla_backbone, object_config).to(device)
+    # dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels, model_config.downsamples)
+    # centernet = Centernet(dla_backbone, object_config).to(device)
+
+    centernet = CenterpointDLA34(object_config).to(device)
 
     centernet.load_state_dict(torch.load(checkpoint, map_location=device))
 
@@ -183,15 +159,30 @@ def main():
             M_projection,
             n_detections=10,
             keypoint_n_detections=10,
-            score_threshold=0.5,
-            keypoint_score_threshold=0.5,
-            keypoint_angle_threshold=0.5,
+            score_threshold=0.3,
+            keypoint_score_threshold=0.1,
+            keypoint_angle_threshold=0.1,
         )[0]
 
         print(len(detections))
 
         for detection in detections:
             cv2.circle(frame, (int(detection.x * 640), int(detection.y * 360)), 3, (255, 0, 0), -1)
+
+            e_x = detection.x * 640
+            e_y = detection.y * 360
+            w = detection.w * 640
+            h = detection.h * 360
+
+            cv2.rectangle(
+                frame,
+                (int(e_x - 0.4 * w), int(e_y - 0.4 * h)),
+                (int(e_x + 0.4 * w), int(e_y + 0.4 * h)),
+                (0, 0, 255),
+                1
+            )
+
+            cv2.putText(frame, f"{detection.score:02f}", (int(e_x - 0.4 * w), int(e_y - 0.5 * h)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1, cv2.LINE_AA)
 
             if detection.cam_t_object is None:
                 continue

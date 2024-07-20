@@ -71,15 +71,6 @@ class PoseSample:
 
         img_np = np.array(img_pil.convert("RGB"))
 
-        if transform is not None:
-            transformed = transform(
-                image=img_np,
-            )
-
-            img_np = transformed["image"]
-
-        img = to_tensor(img_np)
-
         filtered_objects = [
             object for object in data["objects"]
             if object["label"] in label_id_to_index # and object["bbox"]["h"] > 0.01 and object["bbox"]["w"] > 0.01
@@ -93,40 +84,46 @@ class PoseSample:
             len(object.keypoints) if object.train_keypoints else 0 for object in filtered_object_configs
         ])
 
-        valid = torch.full((n_objects,), fill_value=True, dtype=torch.bool)
+        M_projection = torch.Tensor(data["camera"]["projection"]).reshape(3, 4)
 
-        label = torch.zeros(n_objects, dtype=torch.long)
-        center = torch.zeros((n_objects, 2), dtype=torch.float32)
-        size = torch.zeros((n_objects, 2), dtype=torch.float32)
+        bboxes_np = np.zeros((n_objects, 4))
+        bbox_labels_np = np.zeros((n_objects,), dtype=int)
+        bbox_indices_np = np.zeros((n_objects,), dtype=int)
 
-        roll = torch.zeros(n_objects, dtype=torch.float32)
-        pitch = torch.zeros(n_objects, dtype=torch.float32)
-        yaw = torch.zeros(n_objects, dtype=torch.float32)
-        depth = torch.zeros(n_objects, dtype=torch.float32)
+        roll_np = np.zeros((n_objects,))
+        pitch_np = np.zeros((n_objects,))
+        yaw_np = np.zeros((n_objects,))
+        depth_np = np.zeros((n_objects,))
+        keypoints_np = np.zeros((n_keypoint_instances, 2))
 
-        keypoint_valid = torch.full((n_keypoint_instances,), fill_value=True, dtype=torch.bool)
-        keypoint_label = torch.zeros(n_keypoint_instances, dtype=torch.long)
-        keypoint_center = torch.zeros((n_keypoint_instances, 2), dtype=torch.float32)
-        keypoint_object_index = torch.zeros(n_keypoint_instances, dtype=torch.long)
+        keypoint_labels_np = np.zeros((n_keypoint_instances,), dtype=int)
+        keypoint_object_indices_np = np.zeros((n_keypoint_instances,), dtype=int)
 
         keypoint_instance_i = 0
 
-        M_projection = torch.Tensor(data["camera"]["projection"]).reshape(3, 4)
-
         for i, object in enumerate(filtered_objects):
             object_index = label_id_to_index[object["label"]]
-            label[i] = object_index
 
-            center[i, 0] = object["bbox"]["y"]
-            center[i, 1] = object["bbox"]["x"]
+            xmin = object["bbox"]["x"] - object["bbox"]["w"] / 2
+            xmax = object["bbox"]["x"] + object["bbox"]["w"] / 2
+            ymin = object["bbox"]["y"] - object["bbox"]["h"] / 2
+            ymax = object["bbox"]["y"] + object["bbox"]["h"] / 2
 
-            size[i, 0] = object["bbox"]["h"]
-            size[i, 1] = object["bbox"]["w"]
+            bboxes_np[i] = np.clip(np.array([xmin, ymin, xmax, ymax]), 0, 1)
 
-            roll[i] = object["pose"]["roll"]
-            pitch[i] = object["pose"]["pitch"]
-            yaw[i] = object["pose"]["yaw"]
-            depth[i] = object["pose"]["distance"]
+            if bboxes_np[i, 0] == bboxes_np[i, 2]:
+                bboxes_np[i, 2] += 0.01
+            if bboxes_np[i, 1] == bboxes_np[i, 3]:
+                bboxes_np[i, 3] += 0.01
+
+            bboxes_np[i] = np.clip(bboxes_np[i], 0, 1)
+            bbox_indices_np[i] = i
+            bbox_labels_np[i] = object_index
+
+            roll_np[i] = object["pose"]["roll"]
+            pitch_np[i] = object["pose"]["pitch"]
+            yaw_np[i] = object["pose"]["yaw"]
+            depth_np[i] = object["pose"]["distance"]
 
             M_cam_t_object = torch.Tensor(object["pose"]["cam_t_object"]).reshape(4, 4)
 
@@ -134,18 +131,131 @@ class PoseSample:
 
             if config.keypoints is not None:
                 for object_keypoint_index, object_keypoint in enumerate(config.keypoints):
-                    keypoint_label[keypoint_instance_i] = object_config.encode_keypoint_index(object_index, object_keypoint_index)
-                    keypoint_object_index[keypoint_instance_i] = i
-
                     keypoint_object_h = torch.Tensor([object_keypoint[0], object_keypoint[1], object_keypoint[2], 1])
                     keypoint_cam_h = torch.matmul(M_cam_t_object, keypoint_object_h)
                     keypoint_cam_2d_h = torch.matmul(M_projection, keypoint_cam_h)
                     keypoint_cam_2d = keypoint_cam_2d_h[:2] / keypoint_cam_2d_h[2]
 
-                    keypoint_center[keypoint_instance_i, 0] = keypoint_cam_2d[1] / data["camera"]["h"]
-                    keypoint_center[keypoint_instance_i, 1] = keypoint_cam_2d[0] / data["camera"]["w"]
+                    if 0 <= keypoint_cam_2d[0] < data["camera"]["w"] \
+                            and 0 <= keypoint_cam_2d[1] < data["camera"]["h"]:
+                        keypoint_labels_np[keypoint_instance_i] = object_config.encode_keypoint_index(object_index, object_keypoint_index)
+                        keypoint_object_indices_np[keypoint_instance_i] = i
 
-                    keypoint_instance_i += 1
+                        keypoints_np[keypoint_instance_i, 0] = keypoint_cam_2d[0]
+                        keypoints_np[keypoint_instance_i, 1] = keypoint_cam_2d[1]
+
+                        keypoint_instance_i += 1
+
+        n_keypoint_instances = keypoint_instance_i
+        keypoints_np = keypoints_np[:n_keypoint_instances]
+        keypoint_labels_np = keypoint_labels_np[:n_keypoint_instances]
+        keypoint_object_indices_np = keypoint_object_indices_np[:n_keypoint_instances]
+
+        if transform is not None:
+            transformed = transform(
+                image=img_np,
+                bboxes=bboxes_np,
+                bbox_labels=bbox_labels_np,
+                bbox_indices=bbox_indices_np,
+                roll=roll_np,
+                pitch=pitch_np,
+                yaw=yaw_np,
+                depth=depth_np,
+                keypoints=keypoints_np,
+                keypoint_labels=keypoint_labels_np,
+                keypoint_object_indices=keypoint_object_indices_np,
+            )
+
+            img_np = transformed["image"]
+            bboxes_np = np.array(transformed["bboxes"]) if len(transformed["bboxes"]) > 0 else np.zeros((0, 4))
+            bbox_labels_np = np.array(transformed["bbox_labels"], dtype=int)
+            bbox_indices_np = np.array(transformed["bbox_indices"], dtype=int)
+            roll_np = np.array(transformed["roll"])
+            pitch_np = np.array(transformed["pitch"])
+            yaw_np = np.array(transformed["yaw"])
+            depth_np = np.array(transformed["depth"])
+            keypoints_np = np.array(transformed["keypoints"]) if len(transformed["keypoints"]) > 0 else np.zeros((0, 2))
+            keypoint_labels_np = np.array(transformed["keypoint_labels"], dtype=int)
+            keypoint_object_indices_np = np.array(transformed["keypoint_object_indices"], dtype=int)
+
+        img = to_tensor(img_np)
+
+        n_objects = bboxes_np.shape[0]
+        n_keypoint_instances = keypoints_np.shape[0]
+
+        valid = torch.full((n_objects,), fill_value=True, dtype=torch.bool)
+
+        label = torch.Tensor(bbox_labels_np).to(torch.long)
+
+        center = torch.Tensor(np.stack((
+            (bboxes_np[:, 1] + bboxes_np[:, 3]) / 2,
+            (bboxes_np[:, 0] + bboxes_np[:, 2]) / 2,
+        ), axis=-1))
+
+        size = torch.Tensor(np.stack((
+            (bboxes_np[:, 3] - bboxes_np[:, 1]),
+            (bboxes_np[:, 2] - bboxes_np[:, 0]),
+        ), axis=-1))
+
+        roll = torch.Tensor(roll_np)
+        pitch = torch.Tensor(pitch_np)
+        yaw = torch.Tensor(yaw_np)
+        depth = torch.Tensor(depth_np)
+
+        keypoint_valid = torch.full((n_keypoint_instances,), fill_value=True, dtype=torch.bool)
+        keypoint_center = torch.Tensor(np.stack((
+            keypoints_np[:, 1] / data["camera"]["h"],
+            keypoints_np[:, 0] / data["camera"]["w"],
+        ), axis=-1))
+        keypoint_label = torch.Tensor(keypoint_labels_np).to(torch.long)
+
+        for keypoint_i, keypoint_object_index in enumerate(keypoint_object_indices_np):
+            for bbox_i, bbox_index in enumerate(bbox_indices_np):
+                if bbox_index == keypoint_object_index:
+                    keypoint_object_indices_np[keypoint_i] = bbox_i
+                    break
+
+        keypoint_object_index = torch.Tensor(keypoint_object_indices_np).to(torch.long)
+
+        # keypoint_label = torch.zeros(n_keypoint_instances, dtype=torch.long)
+        # keypoint_center = torch.zeros((n_keypoint_instances, 2), dtype=torch.float32)
+        # keypoint_object_index = torch.zeros(n_keypoint_instances, dtype=torch.long)
+
+        # keypoint_instance_i = 0
+
+        # for i, object in enumerate(filtered_objects):
+        #     object_index = label_id_to_index[object["label"]]
+        #     label[i] = object_index
+        #
+        #     center[i, 0] = object["bbox"]["y"]
+        #     center[i, 1] = object["bbox"]["x"]
+        #
+        #     size[i, 0] = object["bbox"]["h"]
+        #     size[i, 1] = object["bbox"]["w"]
+        #
+        #     roll[i] = object["pose"]["roll"]
+        #     pitch[i] = object["pose"]["pitch"]
+        #     yaw[i] = object["pose"]["yaw"]
+        #     depth[i] = object["pose"]["distance"]
+        #
+        #     M_cam_t_object = torch.Tensor(object["pose"]["cam_t_object"]).reshape(4, 4)
+        #
+        #     config = filtered_object_configs[i]
+        #
+        #     if config.keypoints is not None:
+        #         for object_keypoint_index, object_keypoint in enumerate(config.keypoints):
+        #             keypoint_label[keypoint_instance_i] = object_config.encode_keypoint_index(object_index, object_keypoint_index)
+        #             keypoint_object_index[keypoint_instance_i] = i
+        #
+        #             keypoint_object_h = torch.Tensor([object_keypoint[0], object_keypoint[1], object_keypoint[2], 1])
+        #             keypoint_cam_h = torch.matmul(M_cam_t_object, keypoint_object_h)
+        #             keypoint_cam_2d_h = torch.matmul(M_projection, keypoint_cam_h)
+        #             keypoint_cam_2d = keypoint_cam_2d_h[:2] / keypoint_cam_2d_h[2]
+        #
+        #             keypoint_center[keypoint_instance_i, 0] = keypoint_cam_2d[1] / data["camera"]["h"]
+        #             keypoint_center[keypoint_instance_i, 1] = keypoint_cam_2d[0] / data["camera"]["w"]
+        #
+        #             keypoint_instance_i += 1
 
         sample = PoseSample(
             img=img.unsqueeze(0),

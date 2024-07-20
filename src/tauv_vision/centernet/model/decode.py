@@ -37,6 +37,10 @@ class KeypointDetection:
     y: float
     x: float
 
+    w: float
+    h: float
+    depth: float
+
     keypoints: List[Optional[Tuple[float, float, float]]]
     keypoint_scores: List[Optional[float]]
     keypoint_affinities: List[Optional[Tuple[float, float, float]]]
@@ -56,6 +60,9 @@ def decode_keypoints(prediction: Prediction,
     keypoint_heatmap = F.sigmoid(prediction.keypoint_heatmap)
     keypoint_heatmap = heatmap_nms(keypoint_heatmap, kernel_size=3)
     detected_keypoint_index, detected_keypoint_label, detected_keypoint_score = heatmap_detect(keypoint_heatmap, keypoint_n_detections)
+
+    if prediction.depth is not None:
+        depth = 1 / F.sigmoid(prediction.depth)
 
     batch_size = detected_index.shape[0]
 
@@ -79,6 +86,9 @@ def decode_keypoints(prediction: Prediction,
                 score=float(detected_score[sample_i, detection_i]),
                 y=float(detected_index[sample_i, detection_i, 0] / model_config.out_h),
                 x=float(detected_index[sample_i, detection_i, 1] / model_config.out_w),
+                h=float(prediction.size[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 0]),
+                w=float(prediction.size[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1], 1]),
+                depth=float(depth[sample_i, detected_index[sample_i, detection_i, 0], detected_index[sample_i, detection_i, 1]]) if prediction.depth is not None else None,
                 keypoints=[None] * n_keypoints,
                 keypoint_scores=[None] * n_keypoints,
                 keypoint_affinities=[None] * n_keypoints,
