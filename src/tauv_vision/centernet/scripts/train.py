@@ -32,7 +32,7 @@ train_config = TrainConfig(
     heatmap_focal_loss_a=2,
     heatmap_focal_loss_b=4,
     heatmap_sigma_factor=0.1,
-    batch_size=32,
+    batch_size=64,
     n_batches=0,
     n_epochs=100,
     loss_lambda_keypoint_heatmap=1.0,
@@ -43,7 +43,7 @@ train_config = TrainConfig(
     loss_lambda_offset=0.0,
     loss_lambda_angle=0.1,
     loss_lambda_depth=0.1,
-    n_workers=4,
+    n_workers=8,
     weight_save_interval=10,
 )
 
