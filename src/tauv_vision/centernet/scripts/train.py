@@ -200,7 +200,7 @@ val_dataset_roots = [
 ]
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
-checkpoint_path = pathlib.Path("~/Documents/centernet_checkpoints/stellar-river-293_9.pt")
+checkpoint_path = pathlib.Path("~/Documents/centernet_checkpoints/stellar-river-293_9.pt").expanduser()
 
 
 def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, train_config, device):
