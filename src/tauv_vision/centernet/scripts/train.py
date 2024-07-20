@@ -200,6 +200,8 @@ val_dataset_roots = [
 ]
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
+checkpoint_path = pathlib.Path("~/Documents/centernet_checkpoints/stellar-river-293_9.pt")
+
 
 def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, train_config, device):
     centernet.train()
@@ -356,10 +358,11 @@ def main():
     print(f"running on {device}")
 
     centernet = CenterpointDLA34(object_config).to(device)
-
+    if checkpoint_path is not None:
+        centernet.load_state_dict(torch.load(checkpoint_path))
     centernet.train()
 
-    optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-4)
 
     train_datasets = [
         PoseDataset(dataset_root, Split.TRAIN, object_config.label_id_to_index, object_config, train_transform)
@@ -370,7 +373,7 @@ def main():
         PoseDataset(dataset_root, Split.VAL, object_config.label_id_to_index, object_config, val_transform)
         for dataset_root in val_dataset_roots
     ]
-    val_dataset = ConcatDataset(train_datasets)
+    val_dataset = ConcatDataset(val_datasets)
 
     train_dataloader = DataLoader(
         train_dataset,
