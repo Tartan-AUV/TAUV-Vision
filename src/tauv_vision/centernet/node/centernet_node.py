@@ -10,6 +10,7 @@ import pathlib
 from math import pi
 import torchvision.transforms as T
 import cv2
+from threading import Lock
 
 from transform_client import TransformClient
 from tauv_util.cameras import CameraIntrinsics
@@ -29,25 +30,48 @@ model_config = ModelConfig(
     angle_bin_overlap=pi / 3,
 )
 
+
 object_config = ObjectConfigSet(
     configs=[
+        ObjectConfig(
+            id="sample_24_coral",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0)
+            ]
+        ),
+        ObjectConfig(
+            id="sample_24_nautilus",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0)
+            ]
+        ),
         ObjectConfig(
             id="torpedo_24",
             yaw=AngleConfig(train=False, modulo=2 * pi),
             pitch=AngleConfig(train=False, modulo=2 * pi),
             roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
+            train_depth=False,
             train_keypoints=True,
             keypoints=[
                 (0, 0, 0),
-                (0.6096, 0.6096, 0),
-                (0.6096, -0.6096, 0),
-                (-0.6096, -0.6096, 0),
-                (-0.6096, 0.6096, 0),
-                (-0.3, 0, 0),
-                (0.3, 0, 0),
-                (0, -0.3, 0),
-                (0, 0.3, 0),
+                # (0.6096, 0.6096, 0),
+                # (0.6096, -0.6096, 0),
+                # (-0.6096, -0.6096, 0),
+                # (-0.6096, 0.6096, 0),
+                # (-0.3, 0, 0),
+                # (0.3, 0, 0),
+                # (0, -0.3, 0),
+                # (0, 0.3, 0),
             ],
         ),
         ObjectConfig(
@@ -55,7 +79,7 @@ object_config = ObjectConfigSet(
             yaw=AngleConfig(train=False, modulo=2 * pi),
             pitch=AngleConfig(train=False, modulo=2 * pi),
             roll=AngleConfig(train=False, modulo=2 * pi),
-            train_depth=True,
+            train_depth=False,
             train_keypoints=True,
             keypoints=[
                 (0, 0, 0),
@@ -64,12 +88,48 @@ object_config = ObjectConfigSet(
     ]
 )
 
+# object_config = ObjectConfigSet(
+#     configs=[
+#         ObjectConfig(
+#             id="torpedo_24",
+#             yaw=AngleConfig(train=False, modulo=2 * pi),
+#             pitch=AngleConfig(train=False, modulo=2 * pi),
+#             roll=AngleConfig(train=False, modulo=2 * pi),
+#             train_depth=True,
+#             train_keypoints=True,
+#             keypoints=[
+#                 (0, 0, 0),
+#                 (0.6096, 0.6096, 0),
+#                 (0.6096, -0.6096, 0),
+#                 (-0.6096, -0.6096, 0),
+#                 (-0.6096, 0.6096, 0),
+#                 (-0.3, 0, 0),
+#                 (0.3, 0, 0),
+#                 (0, -0.3, 0),
+#                 (0, 0.3, 0),
+#             ],
+#         ),
+#         ObjectConfig(
+#             id="torpedo_24_octagon",
+#             yaw=AngleConfig(train=False, modulo=2 * pi),
+#             pitch=AngleConfig(train=False, modulo=2 * pi),
+#             roll=AngleConfig(train=False, modulo=2 * pi),
+#             train_depth=True,
+#             train_keypoints=True,
+#             keypoints=[
+#                 (0, 0, 0),
+#             ],
+#         )
+#     ]
+# )
+
 object_t_detections: Dict[str, SE3] = {
     "torpedo_24": SE3(SO3.TwoVectors(x="-z", y="x")),
     "torpedo_24_octagon": SE3(SO3.TwoVectors(x="-z", y="x")),
 }
 
-weights_path = pathlib.Path("/shared/weights/dauntless-disco-272-latest.pt").expanduser()
+# weights_path = pathlib.Path("/shared/weights/dauntless-disco-272-latest.pt").expanduser()
+weights_path = pathlib.Path("/shared/weights/polished-salad-301_50.pt").expanduser()
 
 
 class CenternetNode:
@@ -123,6 +183,10 @@ class CenternetNode:
         depth = self._cv_bridge.imgmsg_to_cv2(depth_msg, desired_encoding='mono16')
         depth = depth.astype(float) / 1000
 
+        depth_debug = (depth * (255 / depth.max())).astype(np.uint8)
+        detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
+        self._debug_pubs[frame_id].publish(detection_debug_msg)
+
         img_raw = T.ToTensor()(color_np)
         img = T.Resize((model_config.in_h, model_config.in_w))(img_raw.unsqueeze(0))
         img = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))(img).to(self._device)
@@ -136,6 +200,8 @@ class CenternetNode:
             [0, intrinsics.f_y / 2, intrinsics.c_y / 2],
             [0, 0, 0],
         ])
+        M_projection[0, 0] *= 1.33
+        M_projection[1, 1] *= 1.33
 
         detections = decode_keypoints(
             prediction,
@@ -144,7 +210,7 @@ class CenternetNode:
             M_projection,
             n_detections=10,
             keypoint_n_detections=50,
-            score_threshold=0.5,
+            score_threshold=0.6,
             keypoint_score_threshold=0.3,
             keypoint_angle_threshold=0.3,
         )[0]
@@ -155,12 +221,13 @@ class CenternetNode:
         rospy.logdebug(f"{world_frame} to {camera_frame}")
 
         world_t_cam = None
-        while world_t_cam is None:
-            try:
-                world_t_cam = self._tf_client.get_a_to_b(world_frame, camera_frame, color_msg.header.stamp)
-            except Exception as e:
-                rospy.logwarn(e)
-                rospy.logwarn("Failed to get transform")
+        # while world_t_cam is None:
+        try:
+            world_t_cam = self._tf_client.get_a_to_b(world_frame, camera_frame, color_msg.header.stamp)
+        except Exception as e:
+            rospy.logwarn(e)
+            rospy.logwarn("Failed to get transform")
+            return
 
         rospy.logdebug("Got transforms")
 
@@ -196,6 +263,8 @@ class CenternetNode:
                 (0, 0, 255),
                 1
             )
+
+            cv2.putText(detection_debug_np, f"{detection.score:02f}", (int(e_x - 0.4 * w), int(e_y - 0.5 * h)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1, cv2.LINE_AA)
 
             if np.sum(depth[(depth_mask > 0) & (depth > 0)]) < 10:
                 continue
@@ -236,8 +305,7 @@ class CenternetNode:
 
         self._detections_pub.publish(detection_array_msg)
 
-        detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(np.flip(detection_debug_np, axis=-1), encoding="bgr8")
-        self._debug_pubs[frame_id].publish(detection_debug_msg)
+        # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(np.flip(detection_debug_np, axis=-1), encoding="bgr8")
 
     def _load_config(self):
         self._frame_ids: [str] = rospy.get_param("~frame_ids")

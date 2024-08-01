@@ -93,10 +93,10 @@ object_config = ObjectConfigSet(
         ),
     ]
 )
-checkpoint = pathlib.Path("~/Documents/centernet_runs/latest.pt").expanduser()
+checkpoint = pathlib.Path("~/Documents/centernet_checkpoints/polished-salad-301_latest.pt").expanduser()
 
-in_video = pathlib.Path("~/Downloads/oakd_bottom-color_2024-07-18-01-21-23_15.mp4").expanduser()
-out_video = pathlib.Path("~/Downloads/oakd_bottom-color_2024-07-18-01-21-23_15.out.mp4").expanduser()
+in_video = pathlib.Path("~/Downloads/oakd_front-color_2024-07-18-01-26-23_20.mp4").expanduser()
+out_video = pathlib.Path("~/Downloads/oakd_front-color_2024-07-18-01-26-23_20.out.mp4").expanduser()
 
 def main():
     device = torch.device("cuda")
@@ -159,7 +159,7 @@ def main():
             M_projection,
             n_detections=10,
             keypoint_n_detections=10,
-            score_threshold=0.3,
+            score_threshold=0.6,
             keypoint_score_threshold=0.1,
             keypoint_angle_threshold=0.1,
         )[0]
