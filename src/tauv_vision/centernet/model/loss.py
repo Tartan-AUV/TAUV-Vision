@@ -3,6 +3,7 @@ from math import pi, floor
 import torch.nn.functional as F
 from enum import Enum
 from dataclasses import dataclass
+import matplotlib.pyplot as plt
 
 from tauv_vision.centernet.model.centernet import Prediction
 from tauv_vision.centernet.model.decode import angle_get_bins
@@ -135,7 +136,10 @@ def generate_keypoint_heatmap(truth: PoseSample, model_config: ModelConfig, trai
 
 
 def out_index_for_position(position: torch.Tensor, model_config: ModelConfig) -> torch.Tensor:
-    return (position / model_config.downsample_ratio).to(torch.long)
+    return torch.stack((
+        torch.clamp(((position[:, :, 0] * model_config.in_h) / model_config.downsample_ratio).to(torch.long), 0, model_config.out_h - 1),
+        torch.clamp(((position[:, :, 1] * model_config.in_w) / model_config.downsample_ratio).to(torch.long), 0, model_config.out_w - 1),
+    ), dim=-1)
 
 
 class Angle(Enum):
@@ -171,7 +175,7 @@ def angle_range(truth_label: torch.Tensor, object_config: ObjectConfigSet, angle
     return result.to(device)
 
 
-def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet) -> Losses:
+def loss(prediction: Prediction, truth: PoseSample, model_config: ModelConfig, train_config: TrainConfig, object_config: ObjectConfigSet, img) -> Losses:
 
     losses = Losses()
 

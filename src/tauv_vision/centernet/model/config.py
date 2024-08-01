@@ -1,6 +1,6 @@
 from typing import Optional, Dict, List, Tuple
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 
 @dataclass
@@ -26,6 +26,13 @@ class ModelConfig:
     @property
     def downsample_ratio(self) -> int:
         return 2 ** self.downsamples
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
 
 
 @dataclass
@@ -54,11 +61,25 @@ class TrainConfig:
 
     weight_save_interval: int
 
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
+
 
 @dataclass
 class AngleConfig:
     train: bool
     modulo: Optional[float]
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
 
 
 @dataclass
@@ -74,6 +95,30 @@ class ObjectConfig:
     train_keypoints: bool
 
     keypoints: Optional[List[Tuple[float, float, float]]]
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "yaw": self.yaw.to_dict(),
+            "pitch": self.pitch.to_dict(),
+            "roll": self.roll.to_dict(),
+            "train_depth": self.train_depth,
+            "train_keypoints": self.train_keypoints,
+            "keypoints": [list(keypoint) for keypoint in self.keypoints] if self.keypoints is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            id=data["id"],
+            yaw=AngleConfig.from_dict(data["yaw"]),
+            pitch=AngleConfig.from_dict(data["pitch"]),
+            roll=AngleConfig.from_dict(data["roll"]),
+            train_depth=data["train_depth"],
+            train_keypoints=data["train_keypoints"],
+            keypoints=[tuple(keypoint) for keypoint in data["keypoints"]] if data["keypoints"] is not None else None,
+        )
+
 
 
 class ObjectConfigSet:
@@ -97,6 +142,17 @@ class ObjectConfigSet:
 
         self._keypoint_index_encode = keypoint_index_encode
         self._keypoint_index_decode = keypoint_index_decode
+
+    def to_dict(self):
+        return {
+            "object_configs": [object_config.to_dict() for object_config in self.configs]
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            configs=[ObjectConfig.from_dict(object_config) for object_config in data["object_configs"]]
+        )
 
     @property
     def train_yaw(self) -> bool:

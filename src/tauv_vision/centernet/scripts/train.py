@@ -6,112 +6,38 @@ import wandb
 import albumentations as A
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import numpy as np
 
-from tauv_vision.centernet.model.centernet import Centernet, initialize_weights
+from tauv_vision.centernet.model.centernet import Centernet, initialize_weights, get_head_channels
 from tauv_vision.centernet.model.backbones.dla import DLABackbone
 from tauv_vision.centernet.model.loss import loss
 from tauv_vision.centernet.model.config import ObjectConfig, ObjectConfigSet, AngleConfig, ModelConfig, TrainConfig
 from tauv_vision.datasets.load.pose_dataset import PoseDataset, PoseSample, Split
 
+from tauv_vision.centernet.model.backbones.centerpoint_dla import CenterpointDLA34
+
 torch.autograd.set_detect_anomaly(True)
 
-model_config = ModelConfig(
-    in_h=360,
-    in_w=640,
-    backbone_heights=[2, 2, 2, 2, 2, 2],
-    backbone_channels=[128, 128, 128, 128, 128, 128, 128],
-    downsamples=2,
-    angle_bin_overlap=pi / 3,
-)
+from tauv_vision.centernet.configs.samples_torpedo import model_config, train_config, object_config
 
-train_config = TrainConfig(
-    lr=1e-3,
-    heatmap_focal_loss_a=2,
-    heatmap_focal_loss_b=4,
-    heatmap_sigma_factor=0.1,
-    batch_size=16,
-    n_batches=1000,
-    n_epochs=10000,
-    loss_lambda_keypoint_heatmap=1.0,
-    loss_lambda_keypoint_affinity=0.01,
-    keypoint_heatmap_sigma=2,
-    keypoint_affinity_sigma=2,
-    loss_lambda_size=0.0,
-    loss_lambda_offset=0.0,
-    loss_lambda_angle=1.0,
-    loss_lambda_depth=1.0,
-    n_workers=4,
-    weight_save_interval=1,
-)
-
-
-object_config = ObjectConfigSet(
-    configs=[
-        # ObjectConfig(
-        #     id="torpedo_22_circle",
-        #     yaw=AngleConfig(
-        #         train=True,
-        #         modulo=2 * pi,
-        #     ),
-        #     pitch=AngleConfig(
-        #         train=True,
-        #         modulo=2 * pi,
-        #     ),
-        #     roll=AngleConfig(
-        #         train=True,
-        #         modulo=2 * pi,
-        #     ),
-        #     train_depth=True,
-        # ),
-        ObjectConfig(
-            id="torpedo_22_trapezoid",
-            yaw=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            pitch=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            roll=AngleConfig(
-                train=False,
-                modulo=2 * pi,
-            ),
-            train_depth=False,
-            train_keypoints=True,
-            keypoints=[
-                (0.0, 0.095, 0.105),
-                (0.0, 0.095, -0.105),
-                (0.0, -0.12, -0.06),
-                (0.0, -0.12, 0.06),
-            ],
-        ),
-    ]
-)
 
 train_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets/talk-traditional-party").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
 ]
-val_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/talk-traditional-party").expanduser()
+val_dataset_roots = [
+    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
+]
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
-
-# From https://stackoverflow.com/questions/47714643/pytorch-data-loader-multiple-iterations
-
-def cycle(iterable):
-    while True:
-        for x in iterable:
-            yield x
+checkpoint_path = pathlib.Path("~/Documents/centernet_checkpoints/stellar-river-293_9.pt").expanduser()
 
 
 def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, train_config, device):
     centernet.train()
 
-
     for batch_i, batch in enumerate(data_loader):
-        if batch_i >= train_config.n_batches:
-            break
-
         print(f"train epoch {epoch_i}, batch {batch_i}")
 
         optimizer.zero_grad()
@@ -122,7 +48,7 @@ def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, 
 
         prediction = centernet(img)
 
-        losses = loss(prediction, batch, model_config, train_config, object_config)
+        losses = loss(prediction, batch, model_config, train_config, object_config, img)
 
         total_loss = losses.total
 
@@ -174,7 +100,7 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
                 wandb.log({f"val_heatmap_{batch_i}_{sample_i}": fig})
                 plt.close(fig)
 
-            losses = loss(prediction, batch, model_config, train_config, object_config)
+            losses = loss(prediction, batch, model_config, train_config, object_config, img)
 
             wandb.log({"val_total_loss": losses.total})
             wandb.log({"val_heatmap_loss": losses.heatmap})
@@ -215,6 +141,42 @@ def run_validation_epoch(epoch_i, centernet, data_loader, device):
     wandb.log({"val_avg_depth_loss": avg_losses[9]})
 
 
+train_transform = A.Compose(
+    [
+        A.RandomSizedCrop(
+            min_max_height=(260, 360),
+            w2h_ratio=640 / 360,
+            width=640,
+            height=360,
+            p=0.25,
+        ),
+        A.HueSaturationValue(
+            hue_shift_limit=(-20, 20),
+            sat_shift_limit=(-30, 30),
+            val_shift_limit=(-20, 20),
+            p=0.5,
+        ),
+        A.Flip(),
+        A.Blur(),
+        A.GaussNoise(),
+        A.PiecewiseAffine(scale=[0.01, 0.02], nb_rows=4, nb_cols=4, p=0.1),
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True),
+    ],
+    bbox_params=A.BboxParams(format="albumentations", label_fields=["bbox_labels", "bbox_indices", "roll", "pitch", "yaw", "depth"]),
+    keypoint_params=A.KeypointParams(format="xy", label_fields=["keypoint_labels", "keypoint_object_indices"]),
+)
+
+
+val_transform = A.Compose(
+    [
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), always_apply=True)
+    ],
+    bbox_params=A.BboxParams(format="albumentations",
+                             label_fields=["bbox_labels", "bbox_indices", "roll", "pitch", "yaw", "depth"]),
+    keypoint_params=A.KeypointParams(format="xy", label_fields=["keypoint_labels", "keypoint_object_indices"]),
+)
+
+
 def main():
     for checkpoint in results_root.iterdir():
         checkpoint.unlink()
@@ -224,44 +186,25 @@ def main():
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
     print(f"running on {device}")
 
-    train_transform = A.Compose(
-        [
-            A.HueSaturationValue(
-                hue_shift_limit=(-50, 50),
-                sat_shift_limit=(-30, 0),
-                val_shift_limit=(-20, 20),
-                always_apply=True,
-            ),
-            # A.Blur(
-            #     p=0.5,
-            # ),
-            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.3, 0.3, 0.3), always_apply=True)
-        ]
-    )
-
-    val_transform = A.Compose(
-        [
-            A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.3, 0.3, 0.3), always_apply=True)
-        ]
-    )
-
-    dla_backbone = DLABackbone(model_config.backbone_heights, model_config.backbone_channels, model_config.downsamples)
-    centernet = Centernet(dla_backbone, object_config).to(device)
-
+    centernet = CenterpointDLA34(object_config).to(device)
+    if checkpoint_path is not None:
+        centernet.load_state_dict(torch.load(checkpoint_path))
     centernet.train()
-    initialize_weights(centernet, [])
 
-    optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-4)
 
     train_datasets = [
         PoseDataset(dataset_root, Split.TRAIN, object_config.label_id_to_index, object_config, train_transform)
         for dataset_root in train_dataset_roots
     ]
     train_dataset = ConcatDataset(train_datasets)
-    val_dataset = PoseDataset(val_dataset_root, Split.VAL, object_config.label_id_to_index, object_config, val_transform)
+    val_datasets = [
+        PoseDataset(dataset_root, Split.VAL, object_config.label_id_to_index, object_config, val_transform)
+        for dataset_root in val_dataset_roots
+    ]
+    val_dataset = ConcatDataset(val_datasets)
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -279,9 +222,10 @@ def main():
         num_workers=train_config.n_workers,
     )
 
-    train_dataloader_cycle = iter(cycle(train_dataloader))
-
     for epoch_i in range(train_config.n_epochs):
+        save_path = results_root / f"latest.pt"
+        torch.save(centernet.state_dict(), save_path)
+
         if epoch_i % train_config.weight_save_interval == 0:
             save_path = results_root / f"{epoch_i}.pt"
             torch.save(centernet.state_dict(), save_path)
@@ -289,7 +233,7 @@ def main():
             artifact.add_dir(results_root)
             wandb.log_artifact(artifact)
 
-        run_train_epoch(epoch_i, centernet, optimizer, train_dataloader_cycle, train_config, device)
+        run_train_epoch(epoch_i, centernet, optimizer, train_dataloader, train_config, device)
 
         run_validation_epoch(epoch_i, centernet, val_dataloader, device)
 

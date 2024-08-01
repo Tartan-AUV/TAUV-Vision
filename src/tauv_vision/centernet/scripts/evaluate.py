@@ -42,7 +42,7 @@ object_config = ObjectConfigSet(
         #     train_depth=True,
         # ),
         ObjectConfig(
-            id="torpedo_22_trapezoid",
+            id="sample_24_worm",
             yaw=AngleConfig(
                 train=False,
                 modulo=2 * pi,
@@ -55,21 +55,52 @@ object_config = ObjectConfigSet(
                 train=False,
                 modulo=2 * pi,
             ),
-            train_depth=False,
-            train_keypoints=True,
-            keypoints=[
-                (0.0, 0.1, 0.1),
-                (0.0, 0.1, -0.1),
-                (0.0, -0.1, -0.08),
-                (0.0, -0.1, 0.08),
-            ],
+            train_depth=True,
+            train_keypoints=False,
+            keypoints=[]
+        ),
+        ObjectConfig(
+            id="sample_24_coral",
+            yaw=AngleConfig(
+                train=False,
+                modulo=2 * pi,
+            ),
+            pitch=AngleConfig(
+                train=False,
+                modulo=2 * pi,
+            ),
+            roll=AngleConfig(
+                train=False,
+                modulo=2 * pi,
+            ),
+            train_depth=True,
+            train_keypoints=False,
+            keypoints=[]
+        ),
+        ObjectConfig(
+            id="sample_24_nautilus",
+            yaw=AngleConfig(
+                train=False,
+                modulo=2 * pi,
+            ),
+            pitch=AngleConfig(
+                train=False,
+                modulo=2 * pi,
+            ),
+            roll=AngleConfig(
+                train=False,
+                modulo=2 * pi,
+            ),
+            train_depth=True,
+            train_keypoints=False,
+            keypoints=[]
         ),
     ]
 )
 
-test_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/pay-large-president").expanduser()
+test_dataset_root = pathlib.Path("~/Documents/TAUV-Datasets/stop-fine-mother").expanduser()
 
-checkpoint = pathlib.Path("~/Documents/centernet_runs/0.pt").expanduser()
+checkpoint = pathlib.Path("~/Documents/centernet_runs/16.pt").expanduser()
 
 
 def iou(d1, d2) -> bool:
