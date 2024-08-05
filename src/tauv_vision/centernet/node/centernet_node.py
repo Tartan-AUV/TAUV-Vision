@@ -42,6 +42,8 @@ class CenternetNode:
         self._cv_bridge: CvBridge = CvBridge()
 
         self._device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if not torch.cuda.is_available():
+            rospy.logerr("NO CUDA, SOMETHING IS FUCKED!!!")
 
         self._centernet = CenterpointDLA34(object_config).to(self._device)
         self._centernet.load_state_dict(torch.load(weights_path, map_location=self._device))
