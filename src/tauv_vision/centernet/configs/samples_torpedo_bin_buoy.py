@@ -14,7 +14,7 @@ model_config = ModelConfig(
 
 
 train_config = TrainConfig(
-    lr=5e-4,
+    lr=1e-3,
     heatmap_focal_loss_a=2,
     heatmap_focal_loss_b=4,
     heatmap_sigma_factor=0.1,
@@ -79,6 +79,50 @@ object_config = ObjectConfigSet(
             keypoints=[
                 (0, 0, 0),
             ],
-        )
+        ),
+        ObjectConfig(
+            id="buoy_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="bin_24",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="bin_24_red",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
+        ObjectConfig(
+            id="bin_24_blue",
+            yaw=AngleConfig(train=False, modulo=2 * pi),
+            pitch=AngleConfig(train=False, modulo=2 * pi),
+            roll=AngleConfig(train=False, modulo=2 * pi),
+            train_depth=False,
+            train_keypoints=True,
+            keypoints=[
+                (0, 0, 0),
+            ],
+        ),
     ]
 )

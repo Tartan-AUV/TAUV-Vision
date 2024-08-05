@@ -18,20 +18,26 @@ from tauv_vision.centernet.model.backbones.centerpoint_dla import CenterpointDLA
 
 torch.autograd.set_detect_anomaly(True)
 
-from tauv_vision.centernet.configs.samples_torpedo import model_config, train_config, object_config
+from tauv_vision.centernet.configs.samples_torpedo_bin_buoy import model_config, train_config, object_config
+
 
 
 train_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),
-    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(), # Samples
+    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(), # Torpedo
+    pathlib.Path("~/Documents/TAUV-Datasets-New/turn-black-woman").expanduser(), # Buoy
+    pathlib.Path("~/Documents/TAUV-Datasets-New/write-foreign-office").expanduser(), # Bin
 ]
 val_dataset_roots = [
-    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),
-    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),
+    pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),  # Samples
+    pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),  # Torpedo
+    pathlib.Path("~/Documents/TAUV-Datasets-New/turn-black-woman").expanduser(),  # Buoy
+    pathlib.Path("~/Documents/TAUV-Datasets-New/write-foreign-office").expanduser(),  # Bin
 ]
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
-checkpoint_path = pathlib.Path("~/Documents/centernet_checkpoints/stellar-river-293_9.pt").expanduser()
+# checkpoint_path = pathlib.Path("~/Documents/centernet_checkpoints/stellar-river-293_9.pt").expanduser()
+checkpoint_path = None
 
 
 def run_train_epoch(epoch_i: int, centernet: Centernet, optimizer, data_loader, train_config, device):
@@ -194,6 +200,11 @@ def main():
     centernet.train()
 
     optimizer = torch.optim.Adam(centernet.parameters(), lr=1e-4)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [
+        torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1, total_iters=5),
+        torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1),
+        torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.1),
+    ], milestones=[5, 40])
 
     train_datasets = [
         PoseDataset(dataset_root, Split.TRAIN, object_config.label_id_to_index, object_config, train_transform)
@@ -236,6 +247,10 @@ def main():
         run_train_epoch(epoch_i, centernet, optimizer, train_dataloader, train_config, device)
 
         run_validation_epoch(epoch_i, centernet, val_dataloader, device)
+
+        wandb.log({ 'lr': scheduler.get_last_lr() })
+
+        scheduler.step()
 
     save_path = results_root / f"{epoch_i}.pt"
     torch.save(centernet.state_dict(), save_path)
