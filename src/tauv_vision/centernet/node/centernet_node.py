@@ -11,6 +11,7 @@ from math import pi
 import torchvision.transforms as T
 import cv2
 from threading import Lock
+import platform
 
 from transform_client import TransformClient
 from tauv_util.cameras import CameraIntrinsics
@@ -20,7 +21,7 @@ from tauv_vision.centernet.model.backbones.centerpoint_dla import CenterpointDLA
 from tauv_vision.centernet.model.config import ObjectConfig, ObjectConfigSet, AngleConfig, ModelConfig, TrainConfig
 from tauv_vision.centernet.model.decode import decode_keypoints
 
-from tauv_vision.centernet.configs.samples_torpedo import model_config, train_config, object_config
+from tauv_vision.centernet.configs.samples_torpedo_bin_buoy import model_config, train_config, object_config
 
 
 object_t_detections: Dict[str, SE3] = {
@@ -29,7 +30,12 @@ object_t_detections: Dict[str, SE3] = {
 }
 
 # weights_path = pathlib.Path("/shared/weights/dauntless-disco-272-latest.pt").expanduser()
-weights_path = pathlib.Path("/shared/weights/polished-salad-301_50.pt").expanduser()
+
+weights_name = 'breezy-yoghurt-1521-latest.pt'
+if platform.machine() == 'aarch64':
+    weights_path = pathlib.Path(f'/shared/weights/{weights_name}')
+else:
+    weights_path = pathlib.Path(f"~/catkin_ws/weights/{weights_name}").expanduser()
 
 
 class CenternetNode:
@@ -85,9 +91,11 @@ class CenternetNode:
         depth = self._cv_bridge.imgmsg_to_cv2(depth_msg, desired_encoding='mono16')
         depth = depth.astype(float) / 1000
 
+        img_height, img_width, _ = color_np.shape
+        assert depth.shape == (img_height, img_width)
+
         depth_debug = (depth * (255 / depth.max())).astype(np.uint8)
-        detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
-        self._debug_pubs[frame_id].publish(detection_debug_msg)
+        # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
 
         img_raw = T.ToTensor()(color_np)
         img = T.Resize((model_config.in_h, model_config.in_w))(img_raw.unsqueeze(0))
@@ -97,6 +105,7 @@ class CenternetNode:
 
         intrinsics = self._intrinsics[frame_id]
 
+        # todo(post-comp) do this properly
         M_projection = np.array([
             [intrinsics.f_x / 2, 0, intrinsics.c_x / 2],
             [0, intrinsics.f_y / 2, intrinsics.c_y / 2],
@@ -117,7 +126,7 @@ class CenternetNode:
             keypoint_angle_threshold=0.3,
         )[0]
 
-        world_frame = f"{self._tf_namespace}/odom"
+        world_frame = f"{self._tf_namespace}/{frame_id}"
         camera_frame = f"{self._tf_namespace}/{frame_id}"
 
         rospy.logdebug(f"{world_frame} to {camera_frame}")
@@ -139,14 +148,12 @@ class CenternetNode:
         detection_array_msg.detector_tag = "centernet"
 
         for detection_i, detection in enumerate(detections):
-            print(detection)
-
             cv2.circle(detection_debug_np, (int(detection.x * 640), int(detection.y * 360)), 3, (255, 0, 0), -1)
 
-            e_x = detection.x * 640
-            e_y = detection.y * 360
-            w = detection.w * 640
-            h = detection.h * 360
+            e_x = detection.x * img_width
+            e_y = detection.y * img_height
+            w = detection.w * img_width
+            h = detection.h * img_height
 
             depth_mask = np.zeros(depth.shape, dtype=np.uint8)
 
@@ -167,6 +174,10 @@ class CenternetNode:
             )
 
             cv2.putText(detection_debug_np, f"{detection.score:02f}", (int(e_x - 0.4 * w), int(e_y - 0.5 * h)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
+            # cv2.imshow("depth_msk", depth_mask)
+            # cv2.imshow("depth", depth)
+            # cv2.waitKey(1)
 
             if np.sum(depth[(depth_mask > 0) & (depth > 0)]) < 10:
                 continue
@@ -207,7 +218,8 @@ class CenternetNode:
 
         self._detections_pub.publish(detection_array_msg)
 
-        # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(np.flip(detection_debug_np, axis=-1), encoding="bgr8")
+        detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(np.flip(detection_debug_np, axis=-1), encoding="bgr8")
+        self._debug_pubs[frame_id].publish(detection_debug_msg)
 
     def _load_config(self):
         self._frame_ids: [str] = rospy.get_param("~frame_ids")
