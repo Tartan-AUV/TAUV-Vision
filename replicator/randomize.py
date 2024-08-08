@@ -17,10 +17,11 @@ dosch_underwater_hdris = glob.glob(str(HDRI_DIR / "dosch_underwater/spherical_ma
 misc_hdris = glob.glob(str(HDRI_DIR / "misc/*.exr"))
 
 objs = [
-    # str(MODELS_DIR / "bin_24/usd/bin_24.usd"),
+    str(MODELS_DIR / "new_bin_24/usd/bin_24.usd"),
+    # str(MODELS_DIR / "sample_bin_24/usd/sample_bin_24.usd"),
     # str(MODELS_DIR / "buoy_24/usd/buoy_24.usd"),
-    str(MODELS_DIR / "gate_24/usd/gate_24_ccw.usd"),
-    str(MODELS_DIR / "gate_24/usd/gate_24_cw.usd"),
+    # str(MODELS_DIR / "gate_24/usd/gate_24_ccw.usd"),
+    # str(MODELS_DIR / "gate_24/usd/gate_24_cw.usd"),
     # str(MODELS_DIR / "path_24/usd/path_24.usd"),
     # str(MODELS_DIR / "samples_24/usd/sample_24_coral.usd"),
     # str(MODELS_DIR / "samples_24/usd/sample_24_nautilus.usd"),
@@ -190,7 +191,22 @@ with rep.new_layer():
             )
 
             rep.modify.pose(
-                rotation=rep.distribution.uniform((-30, -30, -180), (30, 30, 180)),
+                rotation=rep.distribution.uniform((-180, -180, -180), (180, 180, 180)),
+            )
+
+        sample_bin = rep.get.prims(semantics=[("class", "sample_bin_24")])
+
+        with sample_bin:
+            rep.modify.pose_camera_relative(
+                camera=camera,
+                render_product=render_product,
+                horizontal_location=rep.distribution.uniform(-0.8, 0.8),
+                vertical_location=rep.distribution.uniform(-0.8, 0.8),
+                distance=rep.distribution.uniform(100, 800),
+            )
+
+            rep.modify.pose(
+                rotation=rep.distribution.uniform((-60, -60, -180), (60, 60, 180)),
             )
 
         gate = rep.get.prims(semantics=[("class", "gate_24_ccw"), ("class", "gate_24_cw")])

@@ -27,12 +27,20 @@ train_dataset_roots = [
     pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(), # Torpedo
     pathlib.Path("~/Documents/TAUV-Datasets-New/turn-black-woman").expanduser(), # Buoy
     pathlib.Path("~/Documents/TAUV-Datasets-New/write-foreign-office").expanduser(), # Bin
+    pathlib.Path("~/Documents/TAUV-Datasets-New/hold-medical-issue").expanduser(), # Sample bin
+    pathlib.Path("~/Documents/TAUV-Datasets-New/continue-physical-month").expanduser(),  # New Bin
+    pathlib.Path("~/Documents/TAUV-Datasets-New/allow-hard-research").expanduser(),  # Gate
+    pathlib.Path("~/Documents/TAUV-Datasets-New/get-green-child").expanduser(),  # Path
 ]
 val_dataset_roots = [
     pathlib.Path("~/Documents/TAUV-Datasets-New/stand-traditional-issue").expanduser(),  # Samples
     pathlib.Path("~/Documents/TAUV-Datasets-New/keep-happy-lot").expanduser(),  # Torpedo
     pathlib.Path("~/Documents/TAUV-Datasets-New/turn-black-woman").expanduser(),  # Buoy
     pathlib.Path("~/Documents/TAUV-Datasets-New/write-foreign-office").expanduser(),  # Bin
+    pathlib.Path("~/Documents/TAUV-Datasets-New/hold-medical-issue").expanduser(),  # Sample bin
+    pathlib.Path("~/Documents/TAUV-Datasets-New/continue-physical-month").expanduser(),  # New Bin
+    pathlib.Path("~/Documents/TAUV-Datasets-New/allow-hard-research").expanduser(),  # Gate
+    pathlib.Path("~/Documents/TAUV-Datasets-New/get-green-child").expanduser(),  # Path
 ]
 results_root = pathlib.Path("~/Documents/centernet_runs").expanduser()
 
