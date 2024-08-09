@@ -126,15 +126,16 @@ class CenternetNode:
             keypoint_angle_threshold=0.3,
         )[0]
 
-        world_frame = f"{self._tf_namespace}/{frame_id}"
+        world_frame = f"{self._tf_namespace}/odom"
         camera_frame = f"{self._tf_namespace}/{frame_id}"
 
-        rospy.logdebug(f"{world_frame} to {camera_frame}")
+        rospy.loginfo(f"{world_frame} to {camera_frame}")
 
         world_t_cam = None
         # while world_t_cam is None:
         try:
             world_t_cam = self._tf_client.get_a_to_b(world_frame, camera_frame, color_msg.header.stamp)
+            rospy.loginfo(f"World to cam: {world_t_cam}")
         except Exception as e:
             rospy.logwarn(e)
             rospy.logwarn("Failed to get transform")
