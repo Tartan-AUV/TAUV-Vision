@@ -297,12 +297,13 @@ class DLA(nn.Module):
             model_weights = torch.load(data + name)
         else:
             model_url = get_model_url(data, name, hash)
-            model_weights = model_zoo.load_url(model_url)
-        num_classes = len(model_weights[list(model_weights.keys())[-1]])
+            # model_weights = model_zoo.load_url(model_url)
+        # num_classes = len(model_weights[list(model_weights.keys())[-1]])
+        num_classes = 1000
         self.fc = nn.Conv2d(
             self.channels[-1], num_classes,
             kernel_size=1, stride=1, padding=0, bias=True)
-        self.load_state_dict(model_weights)
+        # self.load_state_dict(model_weights)
         # self.fc = fc
 
 
