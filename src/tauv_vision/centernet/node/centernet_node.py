@@ -146,7 +146,7 @@ class CenternetNode:
         detection_array_msg.detector_tag = "centernet"
 
         for detection_i, detection in enumerate(detections):
-            cv2.circle(detection_debug_np, (int(detection.x * 640), int(detection.y * 360)), 3, (255, 0, 0), -1)
+            cv2.circle(detection_debug_np, (int(detection.x * img_width), int(detection.y * img_height)), 3, (255, 0, 0), -1)
 
             e_x = detection.x * img_width
             e_y = detection.y * img_height
