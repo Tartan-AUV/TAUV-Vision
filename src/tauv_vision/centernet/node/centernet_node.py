@@ -109,9 +109,12 @@ class CenternetNode:
             [0, intrinsics.f_y / 2, intrinsics.c_y / 2],
             [0, 0, 0],
         ])
-        M_projection[0, 0] *= 1.33
-        M_projection[1, 1] *= 1.33
-        depth *= 1.33
+
+        if platform.machine() == 'aarch64':
+            M_projection[0, 0] *= 1.33
+            M_projection[1, 1] *= 1.33
+            depth *= 1.33
+
 
         depth_debug = (depth * (255 / depth.max())).astype(np.uint8)
         # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
