@@ -94,8 +94,6 @@ class CenternetNode:
         img_height, img_width, _ = color_np.shape
         assert depth.shape == (img_height, img_width)
 
-        depth_debug = (depth * (255 / depth.max())).astype(np.uint8)
-        # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
 
         img_raw = T.ToTensor()(color_np)
         img = T.Resize((model_config.in_h, model_config.in_w))(img_raw.unsqueeze(0))
@@ -113,6 +111,10 @@ class CenternetNode:
         ])
         M_projection[0, 0] *= 1.33
         M_projection[1, 1] *= 1.33
+        depth *= 1.33
+
+        depth_debug = (depth * (255 / depth.max())).astype(np.uint8)
+        # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
 
         detections = decode_keypoints(
             prediction,
