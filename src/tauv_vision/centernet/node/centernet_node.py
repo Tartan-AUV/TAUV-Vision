@@ -183,12 +183,18 @@ class CenternetNode:
             # cv2.waitKey(1)
 
             if np.sum(depth[(depth_mask > 0) & (depth > 0)]) < 10:
+                print(f"Not enough depth values")
+
                 continue
 
             z = np.mean(depth[(depth_mask > 0) & (depth > 0)])
 
+            print(f"Mean z for detection: {z : .4f} m")
+
             if z < 1:
                 continue
+
+            print(f"f_x: {M_projection[0, 0]},  f_y: {M_projection[1, 1]},  c_x: {M_projection[0, 2]},  c_y: {M_projection[1, 2]}")
 
             x = (e_x - M_projection[0, 2]) * (z / M_projection[0, 0])
             y = (e_y - M_projection[1, 2]) * (z / M_projection[1, 1])
