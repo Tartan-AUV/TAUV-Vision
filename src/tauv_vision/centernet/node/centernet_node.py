@@ -45,6 +45,8 @@ class CenternetNode:
 
         self._tf_client: TransformClient = TransformClient()
 
+        self._depth = {}
+
         self._cv_bridge: CvBridge = CvBridge()
 
         self._device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -73,8 +75,6 @@ class CenternetNode:
             self._debug_pubs[frame_id] = rospy.Publisher(f"centernet/{frame_id}/debug", Image, queue_size=10)
 
         self._detections_pub: rospy.Publisher = rospy.Publisher("global_map/feature_detections", FeatureDetections, queue_size=10)
-
-        self._depth = {}
 
     def start(self):
         rospy.spin()
