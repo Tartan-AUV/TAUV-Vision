@@ -105,8 +105,8 @@ class CenternetNode:
 
         # todo(post-comp) do this properly
         M_projection = np.array([
-            [intrinsics.f_x / 2, 0, intrinsics.c_x / 2],
-            [0, intrinsics.f_y / 2, intrinsics.c_y / 2],
+            [intrinsics.f_x, 0, intrinsics.c_x],
+            [0, intrinsics.f_y, intrinsics.c_y],
             [0, 0, 0],
         ])
 
@@ -117,7 +117,7 @@ class CenternetNode:
 
 
         depth_debug = (depth * (255 / depth.max())).astype(np.uint8)
-        detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
+        # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(cv2.applyColorMap(depth_debug, cv2.COLORMAP_JET), encoding="bgr8")
 
         detections = decode_keypoints(
             prediction,
@@ -221,7 +221,7 @@ class CenternetNode:
 
         self._detections_pub.publish(detection_array_msg)
 
-        # detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(np.flip(detection_debug_np, axis=-1), encoding="bgr8")
+        detection_debug_msg = self._cv_bridge.cv2_to_imgmsg(np.flip(detection_debug_np, axis=-1), encoding="bgr8")
         self._debug_pubs[frame_id].publish(detection_debug_msg)
 
     def _load_config(self):
