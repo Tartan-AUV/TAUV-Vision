@@ -6,6 +6,7 @@ oak:
       i_publish_tf_from_calibration: true
     pipeline_gen:
       i_enable_imu: false
+      i_enable_sync: true
       i_publish_tf: true
       i_external_calibration_path: "/tauv-mono/ros_ws/src/tauv_vision/configs/underwater_calib.json"
       i_child_frame_id : "oak"
@@ -13,9 +14,10 @@ oak:
     rgb:
       r_set_man_focus: true
       r_focus: 130
-      i_fps: 5.0
+      i_fps: 3.0
+      r_auto_exposure_limit: 2000
     stereo:
-      i_fps: 5.0
+      i_fps: 3.0
       i_aligned: true
       i_board_socket_id: 0
       i_depth_preset: "HIGH_DETAIL"
@@ -26,10 +28,10 @@ oak:
       i_publish_right_rect: true
       i_enable_threshold_filter: true
       i_threshold_filter_min_range: 300
-      i_threshold_filter_max_range: 4000
+      i_threshold_filter_max_range: 6000
     left:
       i_publish_topic: true
-      i_fps: 5.0
+      i_fps: 3.0
     right:
       i_publish_topic: true
-      i_fps: 5.0
+      i_fps: 3.0

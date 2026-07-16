@@ -33,6 +33,6 @@ def generate_launch_description():
             package='tf2_ros',
             executable='static_transform_publisher',
             # Arguments: x y z yaw pitch roll parent_frame child_frame
-            arguments = ['0.19', '0', '-0.04', '3.141592', '3.141592', '0', 'os/base_link', 'oak_parent_frame']
+            arguments = ['0.176', '0', '-0.066', '3.141592', '3.141592', '0', 'os/base_link', 'oak_parent_frame']
         )
     ])

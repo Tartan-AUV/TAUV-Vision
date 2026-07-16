@@ -10,9 +10,12 @@ from rclpy.qos import qos_profile_sensor_data
 
 import message_filters
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import PoseArray, Pose
+from geometry_msgs.msg import PoseArray, Pose, PoseStamped
+from nav_msgs.msg import Odometry
+from std_msgs.msg import String
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
+from tauv_msgs.msg import Status
 
 import tf2_ros
 
@@ -52,10 +55,19 @@ class BannerTask(Node):
                 ('rgb_topic', 'oak/rgb/image_raw'),
                 ('depth_topic', 'oak/stereo/image_raw'),
                 ('camera_info_topic', 'oak/rgb/camera_info'),
-                ('targets_topic', 'bannerTargets'),
-                ('keypoints_topic', 'bannerKeypoints'),
+                ('targets_topic', 'vision/banner/targets'),
+                # Geometric center (centroid) of the four filtered keypoint
+                # positions, published as a single pose.
+                ('keypoints_center_topic', 'vision/banner/keypoints_center'),
+                ('keypoints_topic', 'vision/banner/keypoints'),
+                # Another node publishes 'stop'/'start'/'reset' here to gate or
+                # clear the filtered keypoint and target estimates.
+                ('control_topic', 'vision/banner/control'),
                 ('filter_frame', 'odom'),
-                ('output_frame', 'os/base_link'),
+                ('output_frame', 'odom'),
+                # Robot pose, used to orient the published poses back toward the
+                # robot. Published in filter_frame (odom).
+                ('odometry_topic', '/odometry/filtered'),
                 ('confidence_threshold', 0.65),
                 ('kp_conf_threshold', 0.5),
                 ('mask_threshold', 0.10),
@@ -92,10 +104,10 @@ class BannerTask(Node):
                 ('min_keypoint_clearance', 0.1),
                 ('banner_class_name', 'banner'),
                 ('model_filename', 'banner2026_best.pt'),
-                ('sync_slop', 0.1),
+                ('sync_slop', 0.15),
                 ('tf_timeout', 0.2),
                 ('measurement_variance', 0.01),
-                ('process_variance', 1e-5),
+                ('process_variance', 3e-4),
             ]
         )
 
@@ -138,6 +150,9 @@ class BannerTask(Node):
         # ---- state ----
         self.bridge = CvBridge()
         self.camera_info = None
+        # Latest robot position in filter_frame from /odometry/filtered; the
+        # banner plane normal is flipped toward this so poses face the robot.
+        self.robot_position = None
         # One constant-position Kalman filter per tracked point, built lazily,
         # keyed 'kp:<name>' for the four keypoints and 'target:<name>' for the
         # ring beside each of them.
@@ -145,16 +160,30 @@ class BannerTask(Node):
         # Latest filtered ring position, keyed by keypoint slot. Persists across
         # frames so a momentarily lost ring keeps reporting its estimate.
         self.target_estimates = {}
+        # When False, incoming frames are ignored so no new filtered locations
+        # are produced. Toggled via the control topic.
+        self.enabled = True
 
         # ---- pubs / subs ----
         self.pub_targets = self.create_publisher(
             PoseArray, self.get_parameter('targets_topic').value, 10)
+        self.pub_keypoints_center = self.create_publisher(
+            PoseStamped, self.get_parameter('keypoints_center_topic').value, 10)
         self.pub_keypoints = self.create_publisher(
             PoseArray, self.get_parameter('keypoints_topic').value, 10)
 
         self.create_subscription(
             CameraInfo, self.get_parameter('camera_info_topic').value,
             self._camera_info_cb, qos_profile_sensor_data)
+
+        self.create_subscription(
+            Odometry, self.get_parameter('odometry_topic').value,
+            self._odom_cb, qos_profile_sensor_data)
+
+        # Lets another node stop/start production or reset the filters.
+        self.create_subscription(
+            String, self.get_parameter('control_topic').value,
+            self._control_cb, 10)
 
         sub_rgb = message_filters.Subscriber(
             self, Image, self.get_parameter('rgb_topic').value,
@@ -168,16 +197,64 @@ class BannerTask(Node):
         self.sync.registerCallback(self._image_cb)
 
         self.get_logger().info('banner_task node ready.')
+        
+        self.mission_planner_pub = self.create_publisher(Status, '/mission/status', 10)
+        message = Status()
+        message.id = "command"
+        message.status = 1
+        self.mission_planner_pub.publish(message)
+        self.get_logger().info('bannerTask notified misison planner')
+
 
     def _camera_info_cb(self, msg):
         self.camera_info = msg
+
+    def _odom_cb(self, msg):
+        """Cache the robot position (filter_frame) from /odometry/filtered."""
+        p = msg.pose.pose.position
+        self.robot_position = np.array([p.x, p.y, p.z], dtype=np.float64)
+
+    def _control_cb(self, msg):
+        """React to a control command from another node.
+
+        'stop'  -- ignore new frames (stops producing filtered locations)
+        'start' -- resume processing frames
+        'reset' -- discard all filtered keypoint and target estimates so the
+                   Kalman filters reinitialise on the next measurement
+        """
+        command = msg.data.strip().lower()
+        if command == 'stop':
+            self.enabled = False
+            self.get_logger().info('banner_task stopped; not producing new locations.')
+        elif command == 'start':
+            self.enabled = True
+            self.get_logger().info('banner_task started.')
+        elif command in ('reset', 'clear'):
+            self._reset_estimates()
+            self.get_logger().info('banner_task keypoint and target estimates reset.')
+        else:
+            self.get_logger().warn(
+                f"Ignoring unknown control command '{msg.data}'; "
+                "expected 'stop', 'start', or 'reset'.")
+
+    def _reset_estimates(self):
+        """Drop every Kalman filter and cached ring estimate."""
+        self.kalman_filters.clear()
+        self.target_estimates.clear()
 
     # ------------------------------------------------------------------
     # Main update step. Any early `return` just skips this frame.
     # ------------------------------------------------------------------
     def _image_cb(self, rgb_msg, depth_msg):
+        if not self.enabled:
+            return  # stopped via control topic; produce no new locations
+
         if self.camera_info is None:
             self.get_logger().warn('No camera_info yet; skipping frame.', throttle_duration_sec=5.0)
+            return
+
+        if self.robot_position is None:
+            self.get_logger().warn('No odometry yet; skipping frame.', throttle_duration_sec=5.0)
             return
 
         camera_frame = self.camera_info.header.frame_id
@@ -201,6 +278,9 @@ class BannerTask(Node):
 
         R_fc, t_fc = transform_stamped_to_Rt(tf_filter_cam)      # filter <- camera
         R_of, t_of = transform_stamped_to_Rt(tf_output_filter)   # output <- filter
+        # Robot position in filter_frame (from /odometry/filtered): the point the
+        # banner normal is flipped toward so the published poses face the robot.
+        robot_pos_filter = self.robot_position
 
         bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
         depth = self.bridge.imgmsg_to_cv2(depth_msg)  # 16UC1 (mm) aligned to rgb
@@ -209,15 +289,18 @@ class BannerTask(Node):
         # --- YOLO inference ---
         results = self.model.predict(bgr, verbose=False)
         if not results:
+            self.get_logger().warn("No labels")
             return
         result = results[0]
 
         box_idx = self._best_banner_box(result)
         if box_idx is None:
+            self.get_logger().warn("No labels in confidence threshold")
             return  # no banner above confidence threshold
 
         keypoints_px = self._extract_keypoints(result, box_idx)
         if keypoints_px is None:
+            self.get_logger().warn("Missing a keypoint")
             return  # missing one or more of the four keypoints
 
         # --- deproject + filter keypoints in filter_frame ---
@@ -226,6 +309,7 @@ class BannerTask(Node):
         for name, (u, v) in keypoints_px.items():
             p_cam = self._deproject(u, v, depth_m, fx, fy, cx, cy)
             if p_cam is None:
+                self.get_logger().warn("Bad depth")
                 return  # invalid depth for a required keypoint
             p_filter = R_fc @ p_cam + t_fc
             filtered_points[name] = self._update_kalman(f'kp:{name}', p_filter)
@@ -234,6 +318,14 @@ class BannerTask(Node):
 
         # --- plane of best fit to the 4 filtered keypoints ---
         plane_point, plane_normal = self._fit_plane(pts)
+
+        # Orientation the robot should hold to look at the banner: the plane
+        # normal flipped to point at the robot, then reversed so the pose's +x
+        # (forward) axis points from the robot into the banner. Shared by every
+        # published pose since they all lie on this one plane. Expressed in
+        # output_frame to match the transformed positions.
+        facing_quat = self._facing_orientation(
+            plane_normal, plane_point, robot_pos_filter, R_of)
 
         # --- target detection inside the banner bbox ---
         x1, y1, x2, y2 = self._bbox(result, box_idx, bgr.shape)
@@ -281,9 +373,15 @@ class BannerTask(Node):
         targets = np.array([self.target_estimates[s] for s in target_slots],
                            dtype=np.float64)
 
+        # Geometric center of the four filtered keypoints (filter_frame).
+        keypoints_center = pts.mean(axis=0)
+
         # --- publish (transform filter_frame -> output_frame) ---
-        self._publish(self.pub_keypoints, pts, R_of, t_of, stamp)
-        self._publish(self.pub_targets, targets, R_of, t_of, stamp)
+        self._publish(self.pub_keypoints, pts, R_of, t_of, stamp, facing_quat)
+        self._publish(self.pub_targets, targets, R_of, t_of, stamp, facing_quat)
+        self._publish_pose(
+            self.pub_keypoints_center, keypoints_center, R_of, t_of, stamp,
+            facing_quat)
 
     # ------------------------------------------------------------------
     # helpers
@@ -491,7 +589,86 @@ class BannerTask(Node):
             return None  # intersection behind the camera
         return origin + t * d_filter
 
-    def _publish(self, publisher, points_filter, R_of, t_of, stamp):
+    def _facing_orientation(self, plane_normal, plane_point, robot_pos, R_of):
+        """Quaternion (in output_frame) that aims a pose's +x axis from the
+        robot into the banner.
+
+        The plane normal has an arbitrary sign from the SVD, so flip it to point
+        toward the robot first; the robot then faces the banner along the
+        opposite direction.
+        """
+        n = plane_normal / (np.linalg.norm(plane_normal) + 1e-12)
+        if n @ (robot_pos - plane_point) < 0.0:
+            n = -n
+        forward = -n  # robot -> banner
+        R_face = self._look_rotation(forward)      # in filter_frame
+        return self._rotation_to_quaternion(R_of @ R_face)  # -> output_frame
+
+    @staticmethod
+    def _look_rotation(forward):
+        """3x3 rotation whose first column is `forward` (+x), kept as level as
+        possible by pinning the up axis near world +z."""
+        x = forward / (np.linalg.norm(forward) + 1e-12)
+        world_up = np.array([0.0, 0.0, 1.0])
+        if abs(x @ world_up) > 0.99:  # forward ~ vertical; pick another reference
+            world_up = np.array([1.0, 0.0, 0.0])
+        y = np.cross(world_up, x)
+        y = y / (np.linalg.norm(y) + 1e-12)
+        z = np.cross(x, y)
+        return np.column_stack((x, y, z))
+
+    @staticmethod
+    def _rotation_to_quaternion(R):
+        """3x3 rotation matrix -> (x, y, z, w) quaternion."""
+        m00, m01, m02 = R[0]
+        m10, m11, m12 = R[1]
+        m20, m21, m22 = R[2]
+        trace = m00 + m11 + m22
+        if trace > 0.0:
+            s = np.sqrt(trace + 1.0) * 2.0
+            w = 0.25 * s
+            x = (m21 - m12) / s
+            y = (m02 - m20) / s
+            z = (m10 - m01) / s
+        elif m00 > m11 and m00 > m22:
+            s = np.sqrt(1.0 + m00 - m11 - m22) * 2.0
+            w = (m21 - m12) / s
+            x = 0.25 * s
+            y = (m01 + m10) / s
+            z = (m02 + m20) / s
+        elif m11 > m22:
+            s = np.sqrt(1.0 + m11 - m00 - m22) * 2.0
+            w = (m02 - m20) / s
+            x = (m01 + m10) / s
+            y = 0.25 * s
+            z = (m12 + m21) / s
+        else:
+            s = np.sqrt(1.0 + m22 - m00 - m11) * 2.0
+            w = (m10 - m01) / s
+            x = (m02 + m20) / s
+            y = (m12 + m21) / s
+            z = 0.25 * s
+        return (x, y, z, w)
+
+    def _publish_pose(self, publisher, point_filter, R_of, t_of, stamp,
+                      orientation=(0.0, 0.0, 0.0, 1.0)):
+        """Publish a single filter_frame point as a PoseStamped (output_frame),
+        sharing the same orientation used for the published PoseArrays."""
+        p_out = R_of @ point_filter + t_of
+        msg = PoseStamped()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self.output_frame
+        msg.pose.position.x = float(p_out[0])
+        msg.pose.position.y = float(p_out[1])
+        msg.pose.position.z = float(p_out[2])
+        msg.pose.orientation.x = float(orientation[0])
+        msg.pose.orientation.y = float(orientation[1])
+        msg.pose.orientation.z = float(orientation[2])
+        msg.pose.orientation.w = float(orientation[3])
+        publisher.publish(msg)
+
+    def _publish(self, publisher, points_filter, R_of, t_of, stamp,
+                 orientation=(0.0, 0.0, 0.0, 1.0)):
         msg = PoseArray()
         msg.header.stamp = stamp
         msg.header.frame_id = self.output_frame
@@ -502,7 +679,10 @@ class BannerTask(Node):
                 pose.position.x = float(p_out[0])
                 pose.position.y = float(p_out[1])
                 pose.position.z = float(p_out[2])
-                pose.orientation.w = 1.0
+                pose.orientation.x = float(orientation[0])
+                pose.orientation.y = float(orientation[1])
+                pose.orientation.z = float(orientation[2])
+                pose.orientation.w = float(orientation[3])
                 msg.poses.append(pose)
         publisher.publish(msg)
 
