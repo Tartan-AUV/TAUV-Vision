@@ -10,7 +10,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 import message_filters
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import PoseArray, Pose, PoseStamped
+from geometry_msgs.msg import PoseArray, Pose
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from cv_bridge import CvBridge
@@ -55,10 +55,10 @@ class BannerTask(Node):
                 ('rgb_topic', 'oak/rgb/image_raw'),
                 ('depth_topic', 'oak/stereo/image_raw'),
                 ('camera_info_topic', 'oak/rgb/camera_info'),
+                # The ring targets, ordered by keypoint id, with the geometric
+                # center (centroid) of the four filtered keypoints appended as a
+                # final pose.
                 ('targets_topic', 'vision/banner/targets'),
-                # Geometric center (centroid) of the four filtered keypoint
-                # positions, published as a single pose.
-                ('keypoints_center_topic', 'vision/banner/keypoints_center'),
                 ('keypoints_topic', 'vision/banner/keypoints'),
                 # Another node publishes 'stop'/'start'/'reset' here to gate or
                 # clear the filtered keypoint and target estimates.
@@ -104,7 +104,17 @@ class BannerTask(Node):
                 ('min_keypoint_clearance', 0.1),
                 ('banner_class_name', 'banner'),
                 ('model_filename', 'banner2026_best.pt'),
-                ('sync_slop', 0.15),
+                # The rgb stream is published straight off the sensor, so its
+                # pixels still carry the lens distortion; only the depth path is
+                # rectified on-device. When True, pixels are pushed through
+                # camera_info's distortion model before back-projection instead
+                # of being taken as ideal pinhole coordinates. On the rgb
+                # calibration (k1 ~ -0.036, k2 ~ -0.061) that correction is 0 at
+                # the principal point and reaches ~15px in the image corner --
+                # about 3cm at 3m. Off by default: it moves every deprojected
+                # point, so turn it on deliberately.
+                ('undistort', False),
+                ('sync_slop', 0.3),
                 ('tf_timeout', 0.2),
                 ('measurement_variance', 0.01),
                 ('process_variance', 3e-4),
@@ -125,6 +135,7 @@ class BannerTask(Node):
         self.min_keypoint_clearance = self.get_parameter(
             'min_keypoint_clearance').value
         self.banner_class_name = self.get_parameter('banner_class_name').value
+        self.undistort = self.get_parameter('undistort').value
         self.measurement_variance = self.get_parameter('measurement_variance').value
         self.process_variance = self.get_parameter('process_variance').value
 
@@ -150,6 +161,10 @@ class BannerTask(Node):
         # ---- state ----
         self.bridge = CvBridge()
         self.camera_info = None
+        # OpenCV-shaped intrinsics/distortion, rebuilt whenever camera_info
+        # arrives so the undistort path does not reshape them per point.
+        self.camera_matrix = None
+        self.distortion = None
         # Latest robot position in filter_frame from /odometry/filtered; the
         # banner plane normal is flipped toward this so poses face the robot.
         self.robot_position = None
@@ -167,8 +182,6 @@ class BannerTask(Node):
         # ---- pubs / subs ----
         self.pub_targets = self.create_publisher(
             PoseArray, self.get_parameter('targets_topic').value, 10)
-        self.pub_keypoints_center = self.create_publisher(
-            PoseStamped, self.get_parameter('keypoints_center_topic').value, 10)
         self.pub_keypoints = self.create_publisher(
             PoseArray, self.get_parameter('keypoints_topic').value, 10)
 
@@ -208,6 +221,8 @@ class BannerTask(Node):
 
     def _camera_info_cb(self, msg):
         self.camera_info = msg
+        self.camera_matrix = np.array(msg.k, dtype=np.float64).reshape(3, 3)
+        self.distortion = np.array(msg.d, dtype=np.float64)
 
     def _odom_cb(self, msg):
         """Cache the robot position (filter_frame) from /odometry/filtered."""
@@ -304,10 +319,9 @@ class BannerTask(Node):
             return  # missing one or more of the four keypoints
 
         # --- deproject + filter keypoints in filter_frame ---
-        fx, fy, cx, cy = self._intrinsics()
         filtered_points = {}
         for name, (u, v) in keypoints_px.items():
-            p_cam = self._deproject(u, v, depth_m, fx, fy, cx, cy)
+            p_cam = self._deproject(u, v, depth_m)
             if p_cam is None:
                 self.get_logger().warn("Bad depth")
                 return  # invalid depth for a required keypoint
@@ -338,7 +352,7 @@ class BannerTask(Node):
         candidates = []   # (slot, distance, point)
         for (u, v) in centers_px:
             p_filter = self._ray_plane_intersect(
-                u, v, fx, fy, cx, cy, R_fc, t_fc, plane_point, plane_normal)
+                u, v, R_fc, t_fc, plane_point, plane_normal)
             if p_filter is None:
                 continue
 
@@ -373,15 +387,15 @@ class BannerTask(Node):
         targets = np.array([self.target_estimates[s] for s in target_slots],
                            dtype=np.float64)
 
-        # Geometric center of the four filtered keypoints (filter_frame).
+        # Geometric center of the four filtered keypoints (filter_frame),
+        # appended as the final pose of the targets array.
         keypoints_center = pts.mean(axis=0)
+        targets = (np.vstack([targets, keypoints_center])
+                   if len(targets) > 0 else keypoints_center[np.newaxis, :])
 
         # --- publish (transform filter_frame -> output_frame) ---
         self._publish(self.pub_keypoints, pts, R_of, t_of, stamp, facing_quat)
         self._publish(self.pub_targets, targets, R_of, t_of, stamp, facing_quat)
-        self._publish_pose(
-            self.pub_keypoints_center, keypoints_center, R_of, t_of, stamp,
-            facing_quat)
 
     # ------------------------------------------------------------------
     # helpers
@@ -389,6 +403,30 @@ class BannerTask(Node):
     def _intrinsics(self):
         k = self.camera_info.k
         return k[0], k[4], k[2], k[5]  # fx, fy, cx, cy
+
+    def _normalized_ray(self, u, v):
+        """Pixel -> (x/z, y/z) on the ideal pinhole plane of the camera frame.
+
+        The only place the lens model enters the geometry. Both the depth
+        deprojection and the ray/plane intersection are built on this, so the
+        two cannot disagree about where a pixel points.
+
+        An all-zero distortion vector means the stream is already rectified, in
+        which case the two paths are algebraically the same and the pinhole
+        formula is taken directly.
+        """
+        if self.undistort and self.distortion is not None and self.distortion.any():
+            pts = np.array([[[u, v]]], dtype=np.float64)
+            if self.camera_info.distortion_model == 'equidistant':
+                # cv2.fisheye takes exactly 4 coefficients (k1..k4).
+                xy = cv2.fisheye.undistortPoints(
+                    pts, self.camera_matrix, self.distortion[:4])
+            else:
+                xy = cv2.undistortPoints(pts, self.camera_matrix, self.distortion)
+            return float(xy[0, 0, 0]), float(xy[0, 0, 1])
+
+        fx, fy, cx, cy = self._intrinsics()
+        return (u - cx) / fx, (v - cy) / fy
 
     def _best_banner_box(self, result):
         """Index of the highest-confidence banner box above threshold, or None."""
@@ -442,9 +480,11 @@ class BannerTask(Node):
         y2 = int(np.clip(y2, 0, h))
         return x1, y1, x2, y2
 
-    def _deproject(self, u, v, depth_m, fx, fy, cx, cy):
+    def _deproject(self, u, v, depth_m):
         """Pixel + depth -> 3D point in the camera optical frame (or None)."""
         # depth may be a different resolution than rgb even when aligned; scale.
+        # The lookup stays at the raw pixel under either path: the depth map is
+        # indexed by where the ring *appears*, which is the distorted location.
         dh, dw = depth_m.shape[:2]
         su = int(round(u * dw / self.camera_info.width))
         sv = int(round(v * dh / self.camera_info.height))
@@ -453,9 +493,8 @@ class BannerTask(Node):
         z = float(depth_m[sv, su])
         if not np.isfinite(z) or z <= 0.0:
             return None
-        x = (u - cx) * z / fx
-        y = (v - cy) * z / fy
-        return np.array([x, y, z], dtype=np.float64)
+        x_n, y_n = self._normalized_ray(u, v)
+        return np.array([x_n * z, y_n * z, z], dtype=np.float64)
 
     def _update_kalman(self, name, measurement):
         kf = self.kalman_filters.get(name)
@@ -572,11 +611,12 @@ class BannerTask(Node):
                 kept.append(cand)
         return kept
 
-    def _ray_plane_intersect(self, u, v, fx, fy, cx, cy, R_fc, t_fc,
+    def _ray_plane_intersect(self, u, v, R_fc, t_fc,
                              plane_point, plane_normal):
         """Back-project pixel to a camera ray, move it into filter_frame, and
         intersect with the fitted plane. Returns a 3D point or None."""
-        d_cam = np.array([(u - cx) / fx, (v - cy) / fy, 1.0], dtype=np.float64)
+        x_n, y_n = self._normalized_ray(u, v)
+        d_cam = np.array([x_n, y_n, 1.0], dtype=np.float64)
         d_filter = R_fc @ d_cam
         d_filter = d_filter / (np.linalg.norm(d_filter) + 1e-12)
         origin = t_fc  # camera center in filter_frame
@@ -649,23 +689,6 @@ class BannerTask(Node):
             y = (m12 + m21) / s
             z = 0.25 * s
         return (x, y, z, w)
-
-    def _publish_pose(self, publisher, point_filter, R_of, t_of, stamp,
-                      orientation=(0.0, 0.0, 0.0, 1.0)):
-        """Publish a single filter_frame point as a PoseStamped (output_frame),
-        sharing the same orientation used for the published PoseArrays."""
-        p_out = R_of @ point_filter + t_of
-        msg = PoseStamped()
-        msg.header.stamp = stamp
-        msg.header.frame_id = self.output_frame
-        msg.pose.position.x = float(p_out[0])
-        msg.pose.position.y = float(p_out[1])
-        msg.pose.position.z = float(p_out[2])
-        msg.pose.orientation.x = float(orientation[0])
-        msg.pose.orientation.y = float(orientation[1])
-        msg.pose.orientation.z = float(orientation[2])
-        msg.pose.orientation.w = float(orientation[3])
-        publisher.publish(msg)
 
     def _publish(self, publisher, points_filter, R_of, t_of, stamp,
                  orientation=(0.0, 0.0, 0.0, 1.0)):
